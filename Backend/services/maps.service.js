@@ -9,11 +9,23 @@ const HEADERS = {
     'Accept-Language': 'en'
 };
 
+/* ================= ERROR TYPE ================= */
+
+// Carries an HTTP status so controllers can respond correctly
+class GeoError extends Error {
+    constructor(message, status = 500) {
+        super(message);
+        this.name = 'GeoError';
+        this.status = status;
+    }
+}
+
 /* ================= GEOCODE CACHE + THROTTLE ================= */
 
 // Nominatim's public server allows ~1 request/second
 const GEO_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 const GEO_CACHE_MAX = 500;
+const MAX_QUEUE_WAIT = 8000; // refuse work if the queue is longer than this
 const geoCache = new Map();
 
 let nextSlot = 0;
@@ -21,6 +33,12 @@ let nextSlot = 0;
 async function throttleNominatim() {
     const now = Date.now();
     const startAt = Math.max(now, nextSlot);
+
+    // FIX: without a cap, rapid requests (e.g. typing) build an endless queue
+    // and ride booking ends up stuck behind stale suggestion lookups
+    if (startAt - now > MAX_QUEUE_WAIT) {
+        throw new GeoError('Location service is busy, try again', 503);
+    }
 
     nextSlot = startAt + 1100;
 
@@ -39,13 +57,12 @@ function cacheGet(key) {
         return null;
     }
 
-    return hit.value;
+    return { ...hit.value }; // copy so callers can't mutate the cache
 }
 
 function cacheSet(key, value) {
     if (geoCache.size >= GEO_CACHE_MAX) {
-        // Drop the oldest entry
-        geoCache.delete(geoCache.keys().next().value);
+        geoCache.delete(geoCache.keys().next().value); // drop oldest
     }
 
     geoCache.set(key, { value, at: Date.now() });
@@ -59,13 +76,11 @@ function buildQueries(original) {
         .map(p => p.replace(/[\u0980-\u09FF]+/g, '').trim()) // strip Bengali script
         .filter(Boolean);
 
-    const cleaned = parts.join(', ');
-
     const queries = [
         original,
-        cleaned,
-        parts.slice(0, 3).join(', '),  // most specific part
-        parts.slice(-4).join(', ')     // locality, district, state, country
+        parts.join(', '),
+        parts.slice(0, 3).join(', '), // most specific parts
+        parts.slice(-4).join(', ')    // locality, district, state, country
     ];
 
     return [...new Set(queries.filter(Boolean))];
@@ -90,7 +105,7 @@ function distanceInKm(lat1, lon1, lat2, lon2) {
 
 async function getAddressCoordinates(address) {
     if (!address || typeof address !== 'string') {
-        throw new Error('Address is required');
+        throw new GeoError('Address is required', 400);
     }
 
     const original = address.trim();
@@ -103,8 +118,6 @@ async function getAddressCoordinates(address) {
     for (const query of buildQueries(original)) {
         try {
             await throttleNominatim();
-
-            console.log('Trying Nominatim:', query);
 
             const { data } = await axios.get(`${NOMINATIM}/search`, {
                 params: {
@@ -123,31 +136,32 @@ async function getAddressCoordinates(address) {
                 const lng = Number(data[0].lon);
 
                 if (Number.isFinite(lat) && Number.isFinite(lng)) {
-                    console.log('Location found:', {
-                        query,
-                        lat,
-                        lng,
-                        display_name: data[0].display_name
-                    });
-
-                    const result = { lat, lng };
+                    // FIX: captains are stored as { ltd, lng }, and the original
+                    // ride code reads `.ltd` — return both names so neither breaks
+                    const result = { lat, ltd: lat, lng };
 
                     cacheSet(cacheKey, result);
 
-                    return result;
+                    return { ...result };
                 }
             }
         } catch (error) {
-            // One failed query must not stop the remaining fallbacks
-            console.error(
-                'Geocoding error for query:',
-                query,
-                error.response?.status || error.message
-            );
+            // Queue is full: no point trying the remaining fallbacks
+            if (error instanceof GeoError) throw error;
+
+            const status = error.response?.status;
+
+            console.error('Geocoding error for query:', query, status || error.message);
+
+            // FIX: if we're blocked/rate-limited, more queries make it worse
+            if (status === 429 || status === 403) {
+                throw new GeoError('Location service is rate limited, try again shortly', 503);
+            }
+            // other failures: continue with the next fallback query
         }
     }
 
-    throw new Error(`Location not found: ${original}`);
+    throw new GeoError(`Location not found: ${original}`, 404);
 }
 
 module.exports.getAddressCoordinates = getAddressCoordinates;
@@ -159,7 +173,7 @@ module.exports.getAddressCoordinate = getAddressCoordinates;
 
 module.exports.getDistanceTime = async (origin, destination) => {
     if (!origin || !destination) {
-        throw new Error('Origin and destination are required');
+        throw new GeoError('Origin and destination are required', 400);
     }
 
     // Sequential on purpose: keeps us under Nominatim's rate limit
@@ -182,7 +196,7 @@ module.exports.getDistanceTime = async (origin, destination) => {
         );
 
         if (data.code !== 'Ok' || !data.routes?.length) {
-            throw new Error(data.message || 'No route found');
+            throw new GeoError(data.message || 'No route found', 404);
         }
 
         const route = data.routes[0];
@@ -201,17 +215,22 @@ module.exports.getDistanceTime = async (origin, destination) => {
             status: 'OK'
         };
     } catch (error) {
+        if (error instanceof GeoError) throw error;
+
         console.error('OSRM Error:', error.response?.data || error.message);
 
-        throw new Error(error.message || 'Unable to calculate route');
+        throw new GeoError('Unable to calculate route', 502);
     }
 };
 
 /* ================= SUGGESTIONS ================= */
 
+// NOTE: Nominatim's public usage policy forbids search-as-you-type
+// autocomplete. Debounce the frontend (>= 600ms, min 3 chars) and consider
+// Photon (photon.komoot.io) or a self-hosted instance for real autocomplete.
 module.exports.getAutoCompleteSuggestions = async (input) => {
     if (!input || typeof input !== 'string') {
-        throw new Error('Query is required');
+        throw new GeoError('Query is required', 400);
     }
 
     try {
@@ -233,12 +252,15 @@ module.exports.getAutoCompleteSuggestions = async (input) => {
             description: place.display_name,
             address: place.display_name,
             lat: Number(place.lat),
+            ltd: Number(place.lat),
             lng: Number(place.lon)
         }));
     } catch (error) {
+        if (error instanceof GeoError) throw error;
+
         console.error('Suggestion Error:', error.response?.data || error.message);
 
-        throw new Error('Unable to get suggestions');
+        throw new GeoError('Unable to get suggestions', 502);
     }
 };
 
@@ -256,19 +278,22 @@ module.exports.getCaptainsInTheRadius = async (lat, lng, radius) => {
         !Number.isFinite(centerLng) ||
         !Number.isFinite(radiusKm)
     ) {
-        throw new Error('lat, lng and radius must be numbers');
+        throw new GeoError('lat, lng and radius must be numbers', 400);
     }
 
+    // FIX: $exists matches null values, and Number(null) === 0, which put
+    // captains with null location at (0, 0). Exclude null explicitly.
     const captains = await captainModel.find({
-        'location.ltd': { $exists: true },
-        'location.lng': { $exists: true }
+        'location.ltd': { $exists: true, $ne: null },
+        'location.lng': { $exists: true, $ne: null }
     });
 
     return captains.filter(captain => {
         const cLat = Number(captain.location.ltd);
         const cLng = Number(captain.location.lng);
 
-        if (Number.isNaN(cLat) || Number.isNaN(cLng)) return false;
+        // FIX: isFinite also rejects Infinity, not just NaN
+        if (!Number.isFinite(cLat) || !Number.isFinite(cLng)) return false;
 
         return distanceInKm(centerLat, centerLng, cLat, cLng) <= radiusKm;
     });

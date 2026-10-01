@@ -6,47 +6,37 @@ const mapController = require('../controllers/map.controller');
 
 const { query } = require('express-validator');
 
+// FIX: auth runs first so unauthenticated callers get 401 instead of
+// validation details; .trim() runs before checks, and notEmpty is explicit
+const text = (name) =>
+    query(name)
+        .isString().withMessage(`${name} must be a string`)
+        .bail()
+        .trim()
+        .isLength({ min: 3 }).withMessage(`${name} must be at least 3 characters`);
+
 
 router.get(
     '/get-coordinates',
-    query('address')
-        .trim()
-        .isString()
-        .isLength({ min: 3 }),
-
     authMiddleware.authUser,
-
+    text('address'),
     mapController.getCoordinates
 );
 
 
 router.get(
     '/get-distance-time',
-    query('origin')
-        .trim()
-        .isString()
-        .isLength({ min: 3 }),
-
-    query('destination')
-        .trim()
-        .isString()
-        .isLength({ min: 3 }),
-
     authMiddleware.authUser,
-
+    text('origin'),
+    text('destination'),
     mapController.getDistanceTime
 );
 
 
 router.get(
     '/get-suggestions',
-    query('input')
-        .trim()
-        .isString()
-        .isLength({ min: 3 }),
-
     authMiddleware.authUser,
-
+    text('input'),
     mapController.getAutoCompleteSuggestions
 );
 
