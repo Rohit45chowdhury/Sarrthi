@@ -1,593 +1,171 @@
-const rideService =
-    require('../services/ride.service');
+const rideService = require('../services/ride.service');
+const { validationResult } = require('express-validator');
+const { sendMessageToSocketId } = require('../socket');
 
-const {
-    validationResult
-} = require('express-validator');
+// Remove otp before sending a ride to a captain
+function withoutOtp(ride) {
+    const obj = ride.toObject ? ride.toObject() : { ...ride };
+    delete obj.otp;
+    return obj;
+}
 
+// ================= CREATE RIDE =================
+module.exports.createRide = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
 
-const {
-    sendMessageToSocketId
-} = require('../socket');
+    const { pickup, destination, vehicleType } = req.body;
 
-
-// =====================================================
-// CREATE RIDE
-// =====================================================
-
-module.exports.createRide =
-    async (req, res) => {
-
-        const errors =
-            validationResult(req);
-
-
-        if (!errors.isEmpty()) {
-
-            return res.status(400).json({
-                errors:
-                    errors.array()
-            });
-
-        }
-
-
-        const {
+    try {
+        const ride = await rideService.createRide({
+            user: req.user._id,
             pickup,
             destination,
             vehicleType
-        } = req.body;
+        });
 
+        console.log('RIDE CREATED:', ride._id, vehicleType, ride.fare);
 
+        // A failure finding captains must not turn a created ride into a 500
+        let nearbyCaptains = [];
         try {
+            nearbyCaptains = await rideService.getNearbyCaptains({ pickup, vehicleType });
+        } catch (err) {
+            console.error('NEARBY CAPTAINS ERROR:', err.message);
+        }
 
-            // -----------------------------------------
-            // CREATE RIDE
-            // -----------------------------------------
+        console.log('NEARBY CAPTAINS:', nearbyCaptains.length);
 
-            const ride =
-                await rideService.createRide({
+        // Ride with populated user (no otp) so the captain popup has user details
+        const rideForCaptains = await rideService.getRideWithUser(ride._id);
 
-                    user:
-                        req.user._id,
+        nearbyCaptains.forEach(({ captain, distance }) => {
+            console.log('Sending ride to captain:', captain._id);
 
-                    pickup,
-
-                    destination,
-
-                    vehicleType
-
-                });
-
-
-            console.log(
-                '=============================='
-            );
-
-            console.log(
-                'RIDE CREATED'
-            );
-
-            console.log(
-                'Ride ID:',
-                ride._id
-            );
-
-            console.log(
-                'Vehicle:',
-                vehicleType
-            );
-
-            console.log(
-                'Pickup:',
-                pickup
-            );
-
-            console.log(
-                'Destination:',
-                destination
-            );
-
-            console.log(
-                'Fare:',
-                ride.fare
-            );
-
-            console.log(
-                '=============================='
-            );
-
-
-            // -----------------------------------------
-            // FIND NEARBY CAPTAINS
-            // -----------------------------------------
-
-            const nearbyCaptains =
-                await rideService.getNearbyCaptains({
-
-                    pickup,
-
-                    vehicleType
-
-                });
-
-
-            console.log(
-                'NEARBY CAPTAINS:',
-                nearbyCaptains.length
-            );
-
-
-            // -----------------------------------------
-            // SEND NEW RIDE NOTIFICATION
-            // -----------------------------------------
-
-            nearbyCaptains.forEach(
-                ({
-                    captain,
-                    distance
-                }) => {
-
-                    console.log(
-                        'Sending ride to captain:',
-                        captain._id
-                    );
-
-
-                    sendMessageToSocketId(
-
-                        captain.socketId,
-
-                        {
-
-                            event:
-                                'new-ride',
-
-
-                            data: {
-
-                                rideId:
-                                    ride._id,
-
-
-                                pickup:
-                                    ride.pickup,
-
-
-                                destination:
-                                    ride.destination,
-
-
-                                fare:
-                                    ride.fare,
-
-
-                                vehicleType:
-                                    ride.vehicleType,
-
-
-                                distance:
-                                    Number(
-                                        distance.toFixed(2)
-                                    )
-
-                            }
-
-                        }
-
-                    );
-
+            sendMessageToSocketId(captain.socketId, {
+                event: 'new-ride',
+                data: {
+                    ...withoutOtp(rideForCaptains),
+                    rideId: ride._id,
+                    distance: Number(distance.toFixed(2))
                 }
-            );
-
-
-            // -----------------------------------------
-            // RESPONSE
-            // -----------------------------------------
-
-            return res.status(201).json({
-
-                ride,
-
-                nearbyCaptains:
-                    nearbyCaptains.length
-
             });
+        });
 
+        return res.status(201).json({
+            ride,
+            nearbyCaptains: nearbyCaptains.length
+        });
+    } catch (err) {
+        console.error('CREATE RIDE ERROR:', err);
+        return res.status(500).json({ message: err.message });
+    }
+};
 
-        } catch (err) {
+// ================= GET FARE =================
+module.exports.getFare = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
 
-            console.error(
-                'CREATE RIDE ERROR:',
-                err
-            );
+    const { pickup, destination } = req.query;
 
+    try {
+        const fare = await rideService.getFare(pickup, destination);
+        return res.status(200).json(fare);
+    } catch (err) {
+        console.error('GET FARE ERROR:', err);
+        return res.status(500).json({ message: err.message });
+    }
+};
 
-            return res.status(500).json({
+// ================= CONFIRM RIDE =================
+module.exports.confirmRide = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
 
-                message:
-                    err.message
+    try {
+        const ride = await rideService.confirmRide({
+            rideId: req.body.rideId,
+            captain: req.captain
+        });
 
+        console.log('RIDE ACCEPTED:', ride._id, 'captain:', ride.captain?._id);
+
+        if (ride.user && ride.user.socketId) {
+            // User gets the full ride INCLUDING otp (they must tell it to the captain)
+            sendMessageToSocketId(ride.user.socketId, {
+                event: 'ride-accepted',
+                data: ride.toObject()
             });
-
+        } else {
+            console.log('User socketId not available');
         }
 
-    };
+        // Captain must NOT receive the otp
+        return res.status(200).json(withoutOtp(ride));
+    } catch (err) {
+        console.error('CONFIRM RIDE ERROR:', err);
+        return res.status(500).json({ message: err.message });
+    }
+};
 
+// ================= START RIDE =================
+module.exports.startRide = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
 
-// =====================================================
-// GET FARE
-// =====================================================
+    try {
+        const ride = await rideService.startRide({
+            rideId: req.query.rideId,
+            otp: req.query.otp,
+            captain: req.captain
+        });
 
-module.exports.getFare =
-    async (req, res) => {
-
-        const errors =
-            validationResult(req);
-
-
-        if (!errors.isEmpty()) {
-
-            return res.status(400).json({
-
-                errors:
-                    errors.array()
-
+        if (ride.user && ride.user.socketId) {
+            sendMessageToSocketId(ride.user.socketId, {
+                event: 'ride-started',
+                data: withoutOtp(ride)
             });
-
         }
 
+        return res.status(200).json(withoutOtp(ride));
+    } catch (err) {
+        console.error('START RIDE ERROR:', err);
+        return res.status(500).json({ message: err.message });
+    }
+};
 
-        const {
-            pickup,
-            destination
-        } = req.query;
+// ================= END RIDE =================
+module.exports.endRide = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
 
+    try {
+        const ride = await rideService.endRide({
+            rideId: req.body.rideId,
+            captain: req.captain
+        });
 
-        console.log(
-            'GET FARE:',
-            {
-                pickup,
-                destination
-            }
-        );
-
-
-        if (
-            !pickup ||
-            !destination
-        ) {
-
-            return res.status(400).json({
-
-                message:
-                    'Pickup and destination are required'
-
+        if (ride.user && ride.user.socketId) {
+            sendMessageToSocketId(ride.user.socketId, {
+                event: 'ride-ended',
+                data: withoutOtp(ride)
             });
-
         }
 
-
-        try {
-
-            const fare =
-                await rideService.getFare(
-
-                    pickup,
-
-                    destination
-
-                );
-
-
-            return res.status(200).json(
-                fare
-            );
-
-
-        } catch (err) {
-
-            console.error(
-                'GET FARE ERROR:',
-                err
-            );
-
-
-            return res.status(500).json({
-
-                message:
-                    err.message
-
-            });
-
-        }
-
-    };
-
-
-// =====================================================
-// CONFIRM / ACCEPT RIDE
-// =====================================================
-
-module.exports.confirmRide =
-    async (req, res) => {
-
-        const errors =
-            validationResult(req);
-
-
-        if (!errors.isEmpty()) {
-
-            return res.status(400).json({
-
-                errors:
-                    errors.array()
-
-            });
-
-        }
-
-
-        try {
-
-            // -----------------------------------------
-            // ACCEPT RIDE
-            // -----------------------------------------
-
-            const ride =
-                await rideService.confirmRide({
-
-                    rideId:
-                        req.body.rideId,
-
-                    captain:
-                        req.captain
-
-                });
-
-
-            console.log(
-                '=============================='
-            );
-
-            console.log(
-                'RIDE ACCEPTED'
-            );
-
-            console.log(
-                'Ride:',
-                ride._id
-            );
-
-            console.log(
-                'Captain:',
-                ride.captain?._id
-            );
-
-            console.log(
-                'User:',
-                ride.user?._id
-            );
-
-            console.log(
-                '=============================='
-            );
-
-
-            // -----------------------------------------
-            // NOTIFY USER
-            // -----------------------------------------
-
-            if (
-                ride.user &&
-                ride.user.socketId
-            ) {
-
-                sendMessageToSocketId(
-
-                    ride.user.socketId,
-
-                    {
-
-                        event:
-                            'ride-accepted',
-
-
-                        data: {
-
-                            rideId:
-                                ride._id,
-
-
-                            pickup:
-                                ride.pickup,
-
-
-                            destination:
-                                ride.destination,
-
-
-                            fare:
-                                ride.fare,
-
-
-                            vehicleType:
-                                ride.vehicleType,
-
-
-                            status:
-                                ride.status,
-
-
-                            captain:
-                                ride.captain
-
-                        }
-
-                    }
-
-                );
-
-            } else {
-
-                console.log(
-                    'User socketId not available'
-                );
-
-            }
-
-
-            return res.status(200).json(
-                ride
-            );
-
-
-        } catch (err) {
-
-            console.error(
-                'CONFIRM RIDE ERROR:',
-                err
-            );
-
-
-            return res.status(500).json({
-
-                message:
-                    err.message
-
-            });
-
-        }
-
-    };
-
-
-// =====================================================
-// START RIDE
-// =====================================================
-// NOT CHANGED
-// =====================================================
-
-module.exports.startRide =
-    async (req, res) => {
-
-        const errors =
-            validationResult(req);
-
-
-        if (!errors.isEmpty()) {
-
-            return res.status(400).json({
-
-                errors:
-                    errors.array()
-
-            });
-
-        }
-
-
-        try {
-
-            const ride =
-                await rideService.startRide({
-
-                    rideId:
-                        req.query.rideId,
-
-                    otp:
-                        req.query.otp,
-
-                    captain:
-                        req.captain
-
-                });
-
-
-            return res.status(200).json(
-                ride
-            );
-
-
-        } catch (err) {
-
-            console.error(
-                'START RIDE ERROR:',
-                err
-            );
-
-
-            return res.status(500).json({
-
-                message:
-                    err.message
-
-            });
-
-        }
-
-    };
-
-
-// =====================================================
-// END RIDE
-// =====================================================
-// NOT CHANGED
-// =====================================================
-
-module.exports.endRide =
-    async (req, res) => {
-
-        const errors =
-            validationResult(req);
-
-
-        if (!errors.isEmpty()) {
-
-            return res.status(400).json({
-
-                errors:
-                    errors.array()
-
-            });
-
-        }
-
-
-        try {
-
-            const ride =
-                await rideService.endRide({
-
-                    rideId:
-                        req.body.rideId,
-
-                    captain:
-                        req.captain
-
-                });
-
-
-            return res.status(200).json(
-                ride
-            );
-
-
-        } catch (err) {
-
-            console.error(
-                'END RIDE ERROR:',
-                err
-            );
-
-
-            return res.status(500).json({
-
-                message:
-                    err.message
-
-            });
-
-        }
-
-    };
+        return res.status(200).json(withoutOtp(ride));
+    } catch (err) {
+        console.error('END RIDE ERROR:', err);
+        return res.status(500).json({ message: err.message });
+    }
+};

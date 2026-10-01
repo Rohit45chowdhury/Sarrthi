@@ -1,3 +1,4 @@
+
 const express = require('express');
 const router = express.Router();
 
@@ -8,6 +9,7 @@ const authMiddleware = require('../middlewares/auth.middleware');
 
 
 // ================= CREATE RIDE =================
+
 router.post(
     '/create',
 
@@ -15,17 +17,28 @@ router.post(
 
     body('pickup')
         .isString()
+        .trim()
         .isLength({ min: 3 })
         .withMessage('Invalid pickup address'),
 
     body('destination')
         .isString()
+        .trim()
         .isLength({ min: 3 })
         .withMessage('Invalid destination address'),
 
     body('vehicleType')
         .isString()
-        .isIn(['auto', 'car', 'moto'])
+        .trim()
+        .toLowerCase()
+        .customSanitizer(value => {
+            if (value === 'moto' || value === 'motorcyle') {
+                return 'motorcycle';
+            }
+
+            return value;
+        })
+        .isIn(['auto', 'car', 'motorcycle'])
         .withMessage('Invalid vehicle type'),
 
     rideController.createRide
@@ -33,6 +46,7 @@ router.post(
 
 
 // ================= GET FARE =================
+
 router.get(
     '/get-fare',
 
@@ -40,11 +54,13 @@ router.get(
 
     query('pickup')
         .isString()
+        .trim()
         .isLength({ min: 3 })
         .withMessage('Invalid pickup address'),
 
     query('destination')
         .isString()
+        .trim()
         .isLength({ min: 3 })
         .withMessage('Invalid destination address'),
 
@@ -53,6 +69,7 @@ router.get(
 
 
 // ================= CONFIRM RIDE =================
+
 router.post(
     '/confirm',
 
@@ -67,7 +84,7 @@ router.post(
 
 
 // ================= START RIDE =================
-// GET + query (controller now reads req.query). Consider switching to POST + body later
+
 router.get(
     '/start-ride',
 
@@ -87,6 +104,7 @@ router.get(
 
 
 // ================= END RIDE =================
+
 router.post(
     '/end-ride',
 
