@@ -1,15 +1,19 @@
-
 import React from 'react'
 
-const RidePopUp = ({ ride, setRidePopupPanel, confirmRide }) => {
+const RidePopUp = ({
+    ride,
+    confirming = false,
+    setRidePopupPanel,
+    confirmRide
+}) => {
 
     const firstName = ride?.user?.fullname?.firstname || 'User'
     const lastName = ride?.user?.fullname?.lastname || ''
 
     const handleAccept = async () => {
-        if (!ride || !confirmRide) return
 
-        console.log('ACCEPT BUTTON CLICKED')
+        if (!ride || !confirmRide || confirming) return
+
         await confirmRide()
     }
 
@@ -17,6 +21,7 @@ const RidePopUp = ({ ride, setRidePopupPanel, confirmRide }) => {
         <div className="relative w-full">
 
             <button
+                type="button"
                 onClick={() => setRidePopupPanel(false)}
                 className="absolute top-0 left-1/2 -translate-x-1/2 text-gray-300"
             >
@@ -38,7 +43,7 @@ const RidePopUp = ({ ride, setRidePopupPanel, confirmRide }) => {
                     />
 
                     <div>
-                        <h2 className="font-semibold">
+                        <h2 className="font-semibold capitalize">
                             {firstName} {lastName}
                         </h2>
                         <p className="text-xs text-gray-700">
@@ -50,7 +55,9 @@ const RidePopUp = ({ ride, setRidePopupPanel, confirmRide }) => {
 
                 <div className="text-right">
                     <p className="text-sm font-semibold">
-                        {ride?.distance ?? '—'} km
+                        {ride?.distance != null
+                            ? `${ride.distance} km`
+                            : '—'}
                     </p>
                     <p className="text-xs">
                         Distance
@@ -99,14 +106,18 @@ const RidePopUp = ({ ride, setRidePopupPanel, confirmRide }) => {
             </div>
 
             <button
+                type="button"
                 onClick={handleAccept}
-                className="w-full bg-green-600 text-white font-semibold py-2.5 rounded-lg"
+                disabled={confirming || !ride}
+                className="w-full mt-2 bg-green-600 text-white font-semibold py-2.5 rounded-lg disabled:opacity-50"
             >
-                Accept
+                {confirming ? 'Accepting...' : 'Accept'}
             </button>
 
             <button
+                type="button"
                 onClick={() => setRidePopupPanel(false)}
+                disabled={confirming}
                 className="w-full mt-2 bg-gray-300 text-gray-700 font-semibold py-2.5 rounded-lg"
             >
                 Ignore
@@ -117,4 +128,3 @@ const RidePopUp = ({ ride, setRidePopupPanel, confirmRide }) => {
 }
 
 export default RidePopUp
-

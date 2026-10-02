@@ -3,6 +3,11 @@ const captainModel = require('../models/captain.model');
 const mapService = require('./maps.service');
 const crypto = require('crypto');
 
+// ---------------- CONFIG ----------------
+// Override from .env: NEARBY_RADIUS_KM=5 (production), MAX_CAPTAINS_PER_RIDE=10
+const NEARBY_RADIUS_KM = Number(process.env.NEARBY_RADIUS_KM) || 100;
+const MAX_CAPTAINS_PER_RIDE = Number(process.env.MAX_CAPTAINS_PER_RIDE) || 10;
+
 // Canonical internal names: auto | car | motorcycle  (matches routes + models)
 function normalizeVehicleType(type) {
     const map = {
@@ -72,6 +77,9 @@ function getDistanceInKm(lat1, lon1, lat2, lon2) {
 }
 
 // ---------------- NEARBY CAPTAINS ----------------
+// Returns [{ captain, distance }] sorted nearest-first.
+// Only captains that are: active, same vehicle type, have a saved location
+// and a saved socketId, and are within NEARBY_RADIUS_KM of the pickup.
 module.exports.getNearbyCaptains = async ({ pickup, vehicleType }) => {
     const normalizedType = normalizeVehicleType(vehicleType);
 
@@ -86,7 +94,7 @@ module.exports.getNearbyCaptains = async ({ pickup, vehicleType }) => {
 
     const pickupLat = Number(pickupCoordinates.lat);
     const pickupLng = Number(pickupCoordinates.lng);
-    if (Number.isNaN(pickupLat) || Number.isNaN(pickupLng)) {
+    if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) {
         throw new Error('Invalid pickup coordinates');
     }
 
@@ -103,17 +111,23 @@ module.exports.getNearbyCaptains = async ({ pickup, vehicleType }) => {
     for (const captain of captains) {
         const lat = Number(captain.location.ltd);
         const lng = Number(captain.location.lng);
-        if (Number.isNaN(lat) || Number.isNaN(lng)) continue;
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
 
         const distance = getDistanceInKm(pickupLat, pickupLng, lat, lng);
-        console.log(`Captain ${captain._id} distance: ${distance.toFixed(2)} KM`);
 
-        if (distance <= 5) {
+        if (distance <= NEARBY_RADIUS_KM) {
             nearbyCaptains.push({ captain, distance });
         }
     }
 
-    return nearbyCaptains;
+    // nearest captain first, and only the closest few get the popup
+    nearbyCaptains.sort((a, b) => a.distance - b.distance);
+
+    console.log(
+        `Pickup (${pickupLat}, ${pickupLng}) | active captains: ${captains.length} | within ${NEARBY_RADIUS_KM} km: ${nearbyCaptains.length}`
+    );
+
+    return nearbyCaptains.slice(0, MAX_CAPTAINS_PER_RIDE);
 };
 
 // ---------------- CREATE RIDE ----------------
@@ -155,7 +169,7 @@ module.exports.confirmRide = async ({ rideId, captain }) => {
         .findOneAndUpdate(
             { _id: rideId, status: 'pending' },
             { status: 'accepted', captain: captain._id },
-            { new: true }
+            { returnDocument: 'after' }
         )
         .populate('user')
         .populate('captain')

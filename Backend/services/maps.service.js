@@ -248,13 +248,33 @@ module.exports.getAutoCompleteSuggestions = async (input) => {
             timeout: 10000
         });
 
-        return (data || []).map(place => ({
-            description: place.display_name,
-            address: place.display_name,
-            lat: Number(place.lat),
-            ltd: Number(place.lat),
-            lng: Number(place.lon)
-        }));
+        return (data || []).map(place => {
+            const lat = Number(place.lat);
+            const lng = Number(place.lon);
+
+            // FIX: remember the coordinates of every suggestion. When the user
+            // picks one, ride creation finds the pickup in the cache and does
+            // not need another Nominatim request (which could fail with
+            // 503/404 and leave the ride with 0 nearby captains).
+            if (
+                place.display_name &&
+                Number.isFinite(lat) &&
+                Number.isFinite(lng)
+            ) {
+                cacheSet(
+                    place.display_name.trim().toLowerCase(),
+                    { lat, ltd: lat, lng }
+                );
+            }
+
+            return {
+                description: place.display_name,
+                address: place.display_name,
+                lat,
+                ltd: lat,
+                lng
+            };
+        });
     } catch (error) {
         if (error instanceof GeoError) throw error;
 
