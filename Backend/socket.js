@@ -2,8 +2,13 @@ const socketIo = require('socket.io');
 const mongoose = require('mongoose');
 const userModel = require('./models/user.model');
 const captainModel = require('./models/captain.model');
+const rideModel = require('./models/ride.model'); // adjust path if different
 
 let io;
+
+// Re-check the ride in DB at most this often, so a finished ride
+// stops being relayed even if the captain's socket stays connected
+const LIVE_RIDE_RECHECK_MS = 30000;
 
 // Map (not a plain object) so inputs like "constructor" can't match
 const MODELS = new Map([
@@ -22,6 +27,15 @@ function toCoord(value) {
     return NaN;
 }
 
+function isValidLatLng(ltd, lng) {
+    return (
+        Number.isFinite(ltd) &&
+        Number.isFinite(lng) &&
+        ltd >= -90 && ltd <= 90 &&
+        lng >= -180 && lng <= 180
+    );
+}
+
 function isSocketConnected(socketId) {
     const sockets = io.sockets.sockets;
 
@@ -33,7 +47,7 @@ function isSocketConnected(socketId) {
 
 function initializeSocket(server) {
 
-    // FIX: calling this twice used to create a second Socket.IO server
+    // calling this twice used to create a second Socket.IO server
     if (io) return io;
 
     io = socketIo(server, {
@@ -69,14 +83,12 @@ function initializeSocket(server) {
 
             try {
 
-                // FIX: destructuring undefined/null data used to throw
                 const { userId, userType } = data || {};
 
                 if (!userId || !userType) {
                     return fail('userId and userType are required');
                 }
 
-                // FIX: validate type and id up front, before touching the DB
                 const Model = MODELS.get(userType);
 
                 if (!Model) {
@@ -93,12 +105,11 @@ function initializeSocket(server) {
                     { new: true, runValidators: true }
                 );
 
-                // FIX: client now hears about a missing account (was silent)
                 if (!updated) {
                     return fail(`${userType} not found`);
                 }
 
-                // FIX: socket disconnected while we were saving, so the
+                // socket disconnected while we were saving, so the
                 // disconnect handler had no identity to clean up. Do it here.
                 if (socket.disconnected) {
                     await Model.updateOne(
@@ -110,6 +121,10 @@ function initializeSocket(server) {
 
                 socket.data.userId = String(updated._id);
                 socket.data.userType = userType;
+
+                // personal room: used to push live data (captain location)
+                // to a user. Rooms are cleared automatically on disconnect.
+                socket.join(`${userType}:${socket.data.userId}`);
 
                 console.log(`JOIN ok: ${userType} ${updated._id} -> ${socket.id}`);
 
@@ -126,14 +141,14 @@ function initializeSocket(server) {
 
 
         // =========================
-        // CAPTAIN LOCATION
+        // CAPTAIN LOCATION (saved in DB)
         // =========================
 
         socket.on('update-location-captain', async (data) => {
 
             try {
 
-                // FIX: trust the identity set at join, not a userId sent by the
+                // trust the identity set at join, not a userId sent by the
                 // client. Otherwise anyone can move any captain on the map.
                 if (
                     socket.data.userType !== 'captain' ||
@@ -142,32 +157,95 @@ function initializeSocket(server) {
                     return emitError(socket, 'Join as a captain first');
                 }
 
-                // FIX: null / '' / true used to pass the old check and
-                // Number(null) became 0, placing captains at (0, 0)
                 const ltd = toCoord(data?.location?.ltd);
                 const lng = toCoord(data?.location?.lng);
 
-                if (
-                    !Number.isFinite(ltd) ||
-                    !Number.isFinite(lng) ||
-                    ltd < -90 || ltd > 90 ||
-                    lng < -180 || lng > 180
-                ) {
+                if (!isValidLatLng(ltd, lng)) {
                     return emitError(socket, 'Invalid location data');
                 }
 
-                // FIX: stored as real numbers (strings used to be saved as sent)
                 await captainModel.updateOne(
                     { _id: socket.data.userId },
                     { $set: { 'location.ltd': ltd, 'location.lng': lng } }
                 );
 
-                // FIX: removed the per-update console.log; it fires every few
-                // seconds per captain and floods the logs
-
             } catch (error) {
 
                 console.error('Captain location update error:', error);
+            }
+        });
+
+
+        // =========================
+        // CAPTAIN LIVE LOCATION -> PASSENGER
+        // =========================
+
+        socket.on('captain-live-location', async (data) => {
+
+            try {
+
+                if (
+                    socket.data.userType !== 'captain' ||
+                    !socket.data.userId
+                ) {
+                    return emitError(socket, 'Join as a captain first');
+                }
+
+                const ltd = toCoord(data?.location?.ltd);
+                const lng = toCoord(data?.location?.lng);
+
+                if (!isValidLatLng(ltd, lng)) {
+                    return emitError(socket, 'Invalid location data');
+                }
+
+                const rideId = data?.rideId;
+
+                if (!mongoose.isValidObjectId(rideId)) return;
+
+                // Verify against the DB only when the ride changes or the
+                // cached check is old. The ride must belong to THIS captain,
+                // so a captain can't push locations to a random passenger.
+                const cached = socket.data.liveRide;
+
+                const needsCheck =
+                    !cached ||
+                    cached.rideId !== String(rideId) ||
+                    Date.now() - cached.checkedAt > LIVE_RIDE_RECHECK_MS;
+
+                if (needsCheck) {
+
+                    const ride = await rideModel
+                        .findOne({
+                            _id: rideId,
+                            captain: socket.data.userId,
+                            status: 'ongoing' // use your actual in-progress status
+                        })
+                        .select('user');
+
+                    if (!ride) {
+                        socket.data.liveRide = null;
+                        return;
+                    }
+
+                    socket.data.liveRide = {
+                        rideId: String(ride._id),
+                        userId: String(ride.user),
+                        checkedAt: Date.now()
+                    };
+                }
+
+                io.to(`user:${socket.data.liveRide.userId}`).emit(
+                    'captain-location',
+                    {
+                        rideId: socket.data.liveRide.rideId,
+                        lat: ltd,
+                        lng
+                    }
+                );
+
+            } catch (error) {
+
+                console.error('Live location relay error:', error);
             }
         });
 
@@ -186,9 +264,9 @@ function initializeSocket(server) {
 
             try {
 
-                // FIX: one targeted query by _id instead of two full scans by
-                // socketId. The socketId condition keeps it race-safe: if the
-                // user already reconnected, the new socketId is left alone.
+                // one targeted query by _id. The socketId condition keeps it
+                // race-safe: if the user already reconnected, the new
+                // socketId is left alone.
                 await MODELS.get(userType).updateOne(
                     { _id: userId, socketId: socket.id },
                     { $unset: { socketId: 1 } }
@@ -230,13 +308,13 @@ const sendMessageToSocketId = (socketId, messageObject) => {
         return false;
     }
 
-    // FIX: stale socketIds (offline captains) used to be "sent" silently
+    // stale socketIds (offline captains) used to be "sent" silently
     if (!isSocketConnected(socketId)) {
         console.log(`Socket not connected: ${socketId} (${messageObject.event})`);
         return false;
     }
 
-    // FIX: no longer logs messageObject.data. Ride payloads contain the OTP.
+    // does not log messageObject.data. Ride payloads contain the OTP.
     console.log(`Sending "${messageObject.event}" to ${socketId}`);
 
     io.to(socketId).emit(messageObject.event, messageObject.data);

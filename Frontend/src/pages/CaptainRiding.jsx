@@ -1,10 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useContext, useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useGSAP } from '@gsap/react'
 import gsap from 'gsap'
 
 import FinishRide from '../components/FinishRide'
 import LiveTracking from '../components/LiveTracking'
+
+import { SocketContext } from '../context/SocketContext'
+import { CaptainDataContext } from '../context/CapatainContext'
 
 // sessionStorage keeps the ride alive after a page refresh
 const readStoredRide = () => {
@@ -20,8 +23,13 @@ const CaptainRiding = () => {
     const location = useLocation()
     const navigate = useNavigate()
 
+    const { socket } = useContext(SocketContext)
+    const { captain } = useContext(CaptainDataContext)
+
     const [finishRidePanel, setFinishRidePanel] = useState(false)
     const finishRidePanelRef = useRef(null)
+
+    const lastPosRef = useRef(null)
 
     // ride comes from navigate('/captain-riding', { state: { ride } })
     const [rideData] = useState(
@@ -33,6 +41,80 @@ const CaptainRiding = () => {
             sessionStorage.setItem('activeRide', JSON.stringify(rideData))
         }
     }, [rideData])
+
+    // ==========================================
+    // LIVE LOCATION -> server -> passenger
+    // (CaptainHome stops tracking when it unmounts, so this page
+    //  has to keep sending during the ride)
+    // ==========================================
+
+    const rideId = rideData?._id
+
+    useEffect(() => {
+
+        if (!socket || !captain?._id || !rideId || !navigator.geolocation) return
+
+        const send = () => {
+
+            if (!lastPosRef.current) return
+
+            // keeps the DB location fresh for future ride matching
+            socket.emit('update-location-captain', {
+                userId: captain._id,
+                location: lastPosRef.current
+            })
+
+            // relayed to the passenger (server checks the ride itself)
+            socket.emit('captain-live-location', {
+                rideId,
+                location: lastPosRef.current
+            })
+        }
+
+        // re-join, because a page refresh creates a new socket.id
+        const join = () => {
+
+            socket.emit(
+                'join',
+                { userId: captain._id, userType: 'captain' },
+                res => {
+                    if (res?.ok) send()
+                }
+            )
+        }
+
+        if (socket.connected) join()
+
+        socket.on('connect', join)
+
+        const watchId = navigator.geolocation.watchPosition(
+            pos => {
+
+                lastPosRef.current = {
+                    ltd: pos.coords.latitude,
+                    lng: pos.coords.longitude
+                }
+
+                send()
+            },
+            err => console.error('Captain GPS error:', err.code, err.message),
+            {
+                enableHighAccuracy: true,
+                maximumAge: 2000,
+                timeout: 30000
+            }
+        )
+
+        // watchPosition is silent while standing still
+        const heartbeat = setInterval(send, 5000)
+
+        return () => {
+            socket.off('connect', join)
+            navigator.geolocation.clearWatch(watchId)
+            clearInterval(heartbeat)
+        }
+
+    }, [socket, captain?._id, rideId])
 
     // ==========================================
     // FINISH RIDE PANEL ANIMATION
