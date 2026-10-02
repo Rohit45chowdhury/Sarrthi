@@ -77,86 +77,106 @@ const CaptainLogin = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gray-100 flex items-center justify-center px-4">
+        
+<div className="min-h-screen w-full bg-[#F5F7FA] flex items-center justify-center px-4 py-8">
 
-            <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-6 sm:p-8">
+  <div className="w-full max-w-md">
 
-                <h1 className="text-3xl font-bold mb-1">
-                    Saarthi
-                </h1>
+    {/* Logo */}
+    <div className="mb-8">
+      <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-[#12334A]">
+        Saarthi<span className="text-[#F15A24]">.</span>
+      </h1>
 
-                <p className="text-gray-500 mb-8">
-                    Captain Login
-                </p>
+      <p className="mt-1 text-xs tracking-[3px] font-medium text-gray-500">
+        YOUR JOURNEY, OUR PRIORITY
+      </p>
+    </div>
 
-                {error && (
-                    <div className="bg-red-100 text-red-600 p-3 rounded-lg mb-4">
-                        {error}
-                    </div>
-                )}
+    {/* Card */}
+    <div className="w-full rounded-2xl bg-white p-6 shadow-xl shadow-[#12334A]/5 sm:p-8">
 
-                <form
-                    onSubmit={handleSubmit}
-                    className="space-y-5"
-                >
+      <h2 className="text-2xl sm:text-3xl font-bold text-[#12334A]">
+        Captain Login
+      </h2>
 
-                    {/* Email */}
-                    <input
-                        type="email"
-                        name="email"
-                        placeholder="Email"
-                        value={formData.email}
-                        onChange={handleChange}
-                        required
-                        className="w-full px-4 py-3 border rounded-lg outline-none focus:border-black"
-                    />
+      <p className="mt-2 mb-7 text-sm text-gray-500">
+        Welcome back! Sign in to continue your journey.
+      </p>
 
-                    {/* Password */}
-                    <input
-                        type="password"
-                        name="password"
-                        placeholder="Password"
-                        value={formData.password}
-                        onChange={handleChange}
-                        required
-                        className="w-full px-4 py-3 border rounded-lg outline-none focus:border-black"
-                    />
-
-                    {/* Login Button */}
-                    <button
-                        type="submit"
-                        className="w-full bg-black text-white py-3 rounded-lg font-semibold hover:bg-gray-800"
-                    >
-                        Login as Captain
-                    </button>
-
-                    {/* User Login Button */}
-                    <button
-                        type="button"
-                        onClick={() => navigate("/login")}
-                        className="mt-3 w-full rounded-lg bg-green-600 px-5 py-4 text-base sm:text-lg font-semibold text-white transition hover:bg-green-700 active:scale-[0.99]"
-                    >
-                        Signin as user
-                    </button>
-
-                </form>
-
-                <p className="text-center text-sm text-gray-600 mt-6">
-
-                    Don't have an account?{" "}
-
-                    <Link
-                        to="/captain-signup"
-                        className="font-semibold text-black hover:underline"
-                    >
-                        Register
-                    </Link>
-
-                </p>
-
-            </div>
-
+      {/* Error */}
+      {error && (
+        <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+          {error}
         </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+
+        {/* Email */}
+        <input
+          type="email"
+          name="email"
+          placeholder="Email"
+          value={formData.email}
+          onChange={handleChange}
+          required
+          className="w-full rounded-xl border border-gray-300 bg-white px-4 py-4 text-base text-[#12334A] outline-none transition duration-200 placeholder:text-gray-400 focus:border-[#F15A24] focus:ring-2 focus:ring-[#F15A24]/15"
+        />
+
+        {/* Password */}
+        <input
+          type="password"
+          name="password"
+          placeholder="Password"
+          value={formData.password}
+          onChange={handleChange}
+          required
+          className="w-full rounded-xl border border-gray-300 bg-white px-4 py-4 text-base text-[#12334A] outline-none transition duration-200 placeholder:text-gray-400 focus:border-[#F15A24] focus:ring-2 focus:ring-[#F15A24]/15"
+        />
+
+        {/* Login Button */}
+        <button
+          type="submit"
+          className="w-full rounded-xl bg-[#12334A] px-5 py-4 text-base sm:text-lg font-semibold text-white shadow-md shadow-[#12334A]/15 transition duration-300 hover:bg-[#F15A24] active:scale-[0.98]"
+        >
+          Login as Captain
+        </button>
+
+        {/* User Login Button */}
+        <button
+          type="button"
+          onClick={() => navigate("/login")}
+          className="w-full rounded-xl border-2 border-[#F15A24] bg-white px-5 py-4 text-base sm:text-lg font-semibold text-[#F15A24] transition duration-300 hover:bg-[#F15A24] hover:text-white active:scale-[0.98]"
+        >
+          Sign in as User
+        </button>
+
+      </form>
+
+      {/* Register */}
+      <p className="mt-7 text-center text-sm text-gray-600">
+        Don't have an account?{" "}
+
+        <Link
+          to="/captain-signup"
+          className="font-semibold text-[#F15A24] underline underline-offset-4 transition hover:text-[#12334A]"
+        >
+          Register
+        </Link>
+      </p>
+
+      {/* Terms */}
+      <p className="mt-8 text-center text-xs leading-5 text-gray-400">
+        By logging in, you agree to Saarthi's Terms and Privacy Policy.
+      </p>
+
+    </div>
+
+  </div>
+
+</div>
+
     );
 };
 

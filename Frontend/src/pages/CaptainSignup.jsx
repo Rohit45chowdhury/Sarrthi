@@ -157,170 +157,196 @@ const CaptainSignup = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center px-4 py-8">
+ <div className="min-h-screen w-full bg-[#F5F7FA] flex items-center justify-center px-4 py-8">
 
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-6 sm:p-8">
+  <div className="w-full max-w-md">
 
-        {/* Header */}
-        <h1 className="text-3xl font-bold mb-1">
-          Saarthi
-        </h1>
+    {/* Logo */}
+    <div className="mb-8">
+      <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-[#12334A]">
+        Saarthi<span className="text-[#F15A24]">.</span>
+      </h1>
 
-        <p className="text-gray-500 mb-6">
-          Create Captain Account
-        </p>
+      <p className="mt-1 text-xs tracking-[3px] font-medium text-gray-500">
+        YOUR JOURNEY, OUR PRIORITY
+      </p>
+    </div>
 
-        {/* Error */}
-        {error && (
-          <div className="bg-red-100 text-red-600 p-3 rounded-lg mb-4">
-            {error}
-          </div>
-        )}
+    {/* Card */}
+    <div className="w-full rounded-2xl bg-white p-6 shadow-xl shadow-[#12334A]/5 sm:p-8">
 
-        <form
-          onSubmit={handleSubmit}
-          className="space-y-4"
-        >
+      {/* Header */}
+      <h2 className="text-2xl sm:text-3xl font-bold text-[#12334A]">
+        Create Captain Account
+      </h2>
 
-          {/* First + Last Name */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <p className="mt-2 text-sm sm:text-base text-gray-500">
+        Register as a Saarthi captain
+      </p>
 
-            <input
-              type="text"
-              name="firstname"
-              placeholder="First name"
-              value={formData.fullname.firstname}
-              onChange={handleChange}
-              required
-              className="w-full px-4 py-3 border rounded-lg outline-none focus:border-black"
-            />
+      {/* Error */}
+      {error && (
+        <div className="mt-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+          {error}
+        </div>
+      )}
 
-            <input
-              type="text"
-              name="lastname"
-              placeholder="Last name"
-              value={formData.fullname.lastname}
-              onChange={handleChange}
-              className="w-full px-4 py-3 border rounded-lg outline-none focus:border-black"
-            />
+      <form
+        onSubmit={handleSubmit}
+        className="mt-7 space-y-4"
+      >
 
-          </div>
+        {/* First + Last Name */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
 
-          {/* Email */}
           <input
-            type="email"
-            name="email"
-            placeholder="Email"
-            value={formData.email}
+            type="text"
+            name="firstname"
+            placeholder="First name"
+            value={formData.fullname.firstname}
             onChange={handleChange}
             required
-            className="w-full px-4 py-3 border rounded-lg outline-none focus:border-black"
+            className="w-full rounded-xl border border-gray-300 bg-white px-4 py-4 text-base text-[#12334A] outline-none transition duration-200 placeholder:text-gray-400 focus:border-[#F15A24] focus:ring-2 focus:ring-[#F15A24]/15"
           />
 
-          {/* Password */}
           <input
-            type="password"
-            name="password"
-            placeholder="Password"
-            value={formData.password}
+            type="text"
+            name="lastname"
+            placeholder="Last name"
+            value={formData.fullname.lastname}
             onChange={handleChange}
-            required
-            minLength={6}
-            className="w-full px-4 py-3 border rounded-lg outline-none focus:border-black"
+            className="w-full rounded-xl border border-gray-300 bg-white px-4 py-4 text-base text-[#12334A] outline-none transition duration-200 placeholder:text-gray-400 focus:border-[#F15A24] focus:ring-2 focus:ring-[#F15A24]/15"
           />
 
-          {/* Vehicle Heading */}
-          <h2 className="text-lg font-semibold pt-2">
+        </div>
+
+        {/* Email */}
+        <input
+          type="email"
+          name="email"
+          placeholder="Email"
+          value={formData.email}
+          onChange={handleChange}
+          required
+          className="w-full rounded-xl border border-gray-300 bg-white px-4 py-4 text-base text-[#12334A] outline-none transition duration-200 placeholder:text-gray-400 focus:border-[#F15A24] focus:ring-2 focus:ring-[#F15A24]/15"
+        />
+
+        {/* Password */}
+        <input
+          type="password"
+          name="password"
+          placeholder="Password"
+          value={formData.password}
+          onChange={handleChange}
+          required
+          minLength={6}
+          className="w-full rounded-xl border border-gray-300 bg-white px-4 py-4 text-base text-[#12334A] outline-none transition duration-200 placeholder:text-gray-400 focus:border-[#F15A24] focus:ring-2 focus:ring-[#F15A24]/15"
+        />
+
+        {/* Vehicle Details */}
+        <div className="pt-3">
+          <h3 className="text-lg font-bold text-[#12334A]">
             Vehicle Details
-          </h2>
+          </h3>
 
-          {/* Vehicle Color */}
-          <input
-            type="text"
-            name="color"
-            placeholder="Vehicle color"
-            value={formData.vehicle.color}
-            onChange={handleChange}
-            required
-            minLength={3}
-            className="w-full px-4 py-3 border rounded-lg outline-none focus:border-black"
-          />
+          <p className="mt-1 text-sm text-gray-500">
+            Enter your vehicle information
+          </p>
+        </div>
 
-          {/* Vehicle Plate */}
-          <input
-            type="text"
-            name="plate"
-            placeholder="Vehicle plate"
-            value={formData.vehicle.plate}
-            onChange={handleChange}
-            required
-            minLength={3}
-            className="w-full px-4 py-3 border rounded-lg outline-none focus:border-black"
-          />
+        {/* Vehicle Color */}
+        <input
+          type="text"
+          name="color"
+          placeholder="Vehicle color"
+          value={formData.vehicle.color}
+          onChange={handleChange}
+          required
+          minLength={3}
+          className="w-full rounded-xl border border-gray-300 bg-white px-4 py-4 text-base text-[#12334A] outline-none transition duration-200 placeholder:text-gray-400 focus:border-[#F15A24] focus:ring-2 focus:ring-[#F15A24]/15"
+        />
 
-          {/* Capacity */}
-          <input
-            type="number"
-            name="capacity"
-            placeholder="Vehicle capacity"
-            value={formData.vehicle.capacity}
-            onChange={handleChange}
-            min="1"
-            required
-            className="w-full px-4 py-3 border rounded-lg outline-none focus:border-black"
-          />
+        {/* Vehicle Plate */}
+        <input
+          type="text"
+          name="plate"
+          placeholder="Vehicle plate"
+          value={formData.vehicle.plate}
+          onChange={handleChange}
+          required
+          minLength={3}
+          className="w-full rounded-xl border border-gray-300 bg-white px-4 py-4 text-base uppercase text-[#12334A] outline-none transition duration-200 placeholder:text-gray-400 placeholder:normal-case focus:border-[#F15A24] focus:ring-2 focus:ring-[#F15A24]/15"
+        />
 
-          {/* Vehicle Type */}
-          <select
-            name="vehicleType"
-            value={formData.vehicle.vehicleType}
-            onChange={handleChange}
-            className="w-full px-4 py-3 border rounded-lg outline-none bg-white focus:border-black"
-          >
-            <option value="car">Car</option>
-            <option value="motorcycle">Motorcycle</option>
-            <option value="auto">Auto</option>
-          </select>
+        {/* Capacity */}
+        <input
+          type="number"
+          name="capacity"
+          placeholder="Vehicle capacity"
+          value={formData.vehicle.capacity}
+          onChange={handleChange}
+          min="1"
+          required
+          className="w-full rounded-xl border border-gray-300 bg-white px-4 py-4 text-base text-[#12334A] outline-none transition duration-200 placeholder:text-gray-400 focus:border-[#F15A24] focus:ring-2 focus:ring-[#F15A24]/15"
+        />
 
-          {/* Submit */}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-black text-white py-3 rounded-lg font-semibold hover:bg-gray-800 disabled:opacity-60"
-          >
-            {loading
-              ? "Creating account..."
-              : "Create Captain Account"}
-          </button>
+        {/* Vehicle Type */}
+        <select
+          name="vehicleType"
+          value={formData.vehicle.vehicleType}
+          onChange={handleChange}
+          className="w-full rounded-xl border border-gray-300 bg-white px-4 py-4 text-base text-[#12334A] outline-none transition duration-200 focus:border-[#F15A24] focus:ring-2 focus:ring-[#F15A24]/15"
+        >
+          <option value="car">Car</option>
+          <option value="motorcycle">Motorcycle</option>
+          <option value="auto">Auto</option>
+        </select>
 
-          {/* User Signup */}
-          <button
-            type="button"
-            onClick={() => navigate("/signup")}
-            className="mt-3 w-full rounded-lg bg-green-600 px-5 py-4 text-base sm:text-lg font-semibold text-white transition hover:bg-green-700 active:scale-[0.99]"
-          >
-            Signup as User
-          </button>
+        {/* Create Captain Account */}
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full rounded-xl bg-[#12334A] px-5 py-4 text-base sm:text-lg font-semibold text-white shadow-md shadow-[#12334A]/15 transition duration-300 hover:bg-[#F15A24] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {loading
+            ? "Creating account..."
+            : "Create Captain Account"}
+        </button>
 
-        </form>
+        {/* User Signup */}
+        <button
+          type="button"
+          onClick={() => navigate("/signup")}
+          className="w-full rounded-xl border-2 border-[#F15A24] bg-white px-5 py-4 text-base sm:text-lg font-semibold text-[#F15A24] transition duration-300 hover:bg-[#F15A24] hover:text-white active:scale-[0.98]"
+        >
+          Signup as User
+        </button>
 
-        {/* Login */}
-        <p className="text-center text-sm text-gray-600 mt-6">
+      </form>
 
-          Already have an account?{" "}
+      {/* Login */}
+      <p className="mt-7 text-center text-sm sm:text-base text-gray-600">
+        Already have an account?{" "}
 
-          <Link
-            to="/captain-login"
-            className="font-semibold text-black hover:underline"
-          >
-            Login
-          </Link>
+        <Link
+          to="/captain-login"
+          className="font-semibold text-[#F15A24] underline underline-offset-4 transition hover:text-[#12334A]"
+        >
+          Login
+        </Link>
+      </p>
 
-        </p>
-
-      </div>
+      {/* Terms */}
+      <p className="mt-8 text-center text-xs leading-5 text-gray-400">
+        By creating an account, you agree to Saarthi&apos;s Terms and Privacy
+        Policy.
+      </p>
 
     </div>
+
+  </div>
+
+</div>
   );
 };
 

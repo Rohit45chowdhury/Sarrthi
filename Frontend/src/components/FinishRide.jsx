@@ -81,97 +81,231 @@ const FinishRide = (props) => {
     }
 
     return (
-        <div className='relative'>
+    <div className="relative mx-auto w-full max-w-4xl">
 
-            <h5
-                className='p-1 text-center w-full absolute top-0 left-0 cursor-pointer'
-                onClick={() => props.setFinishRidePanel(false)}
-            >
-                <i className='text-3xl text-gray-300 ri-arrow-down-wide-line'></i>
-            </h5>
+        {/* CLOSE BUTTON */}
+        <button
+            type="button"
+            onClick={() => props.setFinishRidePanel(false)}
+            aria-label="Close finish ride panel"
+            className="absolute top-0 left-1/2 -translate-x-1/2 w-12 h-8 flex items-center justify-center"
+        >
+            <i className="text-3xl text-gray-300 ri-arrow-down-wide-line"></i>
+        </button>
 
-            <h3 className='text-2xl font-semibold mb-5 pt-6'>
-                Finish this Ride
-            </h3>
+        {/* HEADING */}
+        <div className="pt-8 mb-4 flex items-center justify-between">
+            <div>
+                <h3 className="text-2xl sm:text-3xl font-extrabold text-[#12334A]">
+                    Finish this ride
+                </h3>
+                <p className="mt-0.5 text-sm text-gray-500">
+                    Complete the trip once the rider is dropped off
+                </p>
+            </div>
 
-            <div className='flex items-center justify-between p-4 border-2 border-yellow-400 rounded-lg mt-4'>
+            <span className="relative flex h-3 w-3">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#F15A24] opacity-60" />
+                <span className="relative inline-flex h-3 w-3 rounded-full bg-[#F15A24]" />
+            </span>
+        </div>
 
-                <div className='flex items-center gap-3'>
-                    <img
-                        className='h-12 rounded-full object-cover w-12'
-                        src='https://i.pinimg.com/236x/af/26/28/af26280b0ca305be47df0b799ed1b12b.jpg'
-                        alt=''
-                    />
-                    <h2 className='text-lg font-medium capitalize'>
-                        {ride?.user?.fullname?.firstname || 'Rider'}
-                    </h2>
+
+        {/* ERROR */}
+        {error && (
+            <div className="mb-4 flex items-start gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+                <i className="ri-error-warning-line text-lg"></i>
+                <span className="min-w-0 break-words">{error}</span>
+            </div>
+        )}
+
+
+        <div className="grid gap-4 lg:grid-cols-2 lg:gap-6">
+
+            {/* ================= LEFT COLUMN ================= */}
+            <div className="space-y-4">
+
+                {/* RIDER PROFILE CARD */}
+                <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#12334A] to-[#1d4e6e] p-4 text-white shadow-lg sm:p-5">
+
+                    <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-[#F15A24]/20" />
+                    <div className="absolute -bottom-10 -left-6 h-24 w-24 rounded-full bg-white/5" />
+
+                    <div className="relative flex items-center gap-4">
+
+                        {/* PROFILE IMAGE */}
+                        <div className="relative shrink-0">
+
+                            <div className="relative flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-white text-2xl font-extrabold text-[#12334A] ring-4 ring-[#F15A24] ring-offset-2 ring-offset-[#12334A] sm:h-20 sm:w-20 sm:text-3xl">
+
+                                <span>
+                                    {String(ride?.user?.fullname?.firstname || 'R')
+                                        .charAt(0)
+                                        .toUpperCase()}
+                                </span>
+
+                                {(ride?.user?.profileImage ||
+                                    ride?.user?.profilePhoto ||
+                                    ride?.user?.avatar ||
+                                    ride?.user?.image ||
+                                    ride?.user?.photo) && (
+                                    <img
+                                        src={
+                                            ride?.user?.profileImage ||
+                                            ride?.user?.profilePhoto ||
+                                            ride?.user?.avatar ||
+                                            ride?.user?.image ||
+                                            ride?.user?.photo
+                                        }
+                                        alt={ride?.user?.fullname?.firstname || 'Rider'}
+                                        className="absolute inset-0 h-full w-full object-cover"
+                                        onError={e => {
+                                            e.currentTarget.style.display = 'none'
+                                        }}
+                                    />
+                                )}
+
+                            </div>
+
+                            <div className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full border-2 border-[#12334A] bg-[#F15A24] text-xs text-white">
+                                <i className="ri-user-3-fill"></i>
+                            </div>
+
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                            <p className="text-xs uppercase tracking-wide text-white/60">
+                                Rider
+                            </p>
+                            <h2 className="truncate text-xl font-extrabold capitalize sm:text-2xl">
+                                {ride?.user?.fullname?.firstname || 'Rider'}
+                            </h2>
+
+                            <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-medium">
+                                <i className="ri-route-line text-[#F15A24]"></i>
+                                {distanceKm ? `${distanceKm} km` : '—'}
+                            </div>
+                        </div>
+
+                    </div>
                 </div>
 
-                <h5 className='text-lg font-semibold'>
-                    {distanceKm ? `${distanceKm} KM` : '—'}
-                </h5>
+
+                {/* ROUTE CARD */}
+                <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm sm:p-5">
+
+                    <div className="flex gap-4">
+
+                        {/* timeline */}
+                        <div className="flex flex-col items-center pt-1">
+                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#12334A]/10 text-[#12334A]">
+                                <i className="ri-map-pin-user-fill text-sm"></i>
+                            </span>
+                            <span className="my-1 w-px flex-1 border-l-2 border-dashed border-gray-300" />
+                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
+                                <i className="ri-map-pin-2-fill text-sm"></i>
+                            </span>
+                        </div>
+
+                        {/* addresses */}
+                        <div className="min-w-0 flex-1 space-y-4">
+
+                            <div>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                                    Pickup
+                                </p>
+                                <p className="mt-0.5 break-words text-sm font-medium text-[#12334A]">
+                                    {ride?.pickup || 'Unavailable'}
+                                </p>
+                            </div>
+
+                            <div>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                                    Destination
+                                </p>
+                                <p className="mt-0.5 break-words text-sm font-medium text-[#12334A]">
+                                    {ride?.destination || 'Unavailable'}
+                                </p>
+                            </div>
+
+                        </div>
+
+                    </div>
+                </div>
 
             </div>
 
-            {error && (
-                <div className='mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600'>
-                    {error}
-                </div>
-            )}
 
-            <div className='flex gap-2 justify-between flex-col items-center'>
+            {/* ================= RIGHT COLUMN ================= */}
+            <div className="flex flex-col gap-4">
 
-                <div className='w-full mt-5'>
+                {/* TRIP SUMMARY */}
+                <div className="rounded-2xl bg-[#F5F7FA] p-4 sm:p-5">
 
-                    <div className='flex items-center gap-5 p-3 border-b-2'>
-                        <i className='ri-map-pin-user-fill'></i>
-                        <div className='min-w-0'>
-                            <h3 className='text-lg font-medium'>Pickup</h3>
-                            <p className='text-sm -mt-1 text-gray-600'>
-                                {ride?.pickup || 'Unavailable'}
+                    <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                        Trip summary
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-3">
+
+                        <div className="rounded-xl bg-white p-3 shadow-sm">
+                            <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
+                                <i className="ri-route-line text-lg"></i>
+                            </div>
+                            <p className="text-xs text-gray-500">Distance</p>
+                            <p className="text-lg font-bold text-[#12334A]">
+                                {distanceKm ? `${distanceKm} km` : '—'}
                             </p>
                         </div>
+
+                        <div className="rounded-xl bg-white p-3 shadow-sm">
+                            <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
+                                <i className="ri-money-rupee-circle-line text-lg"></i>
+                            </div>
+                            <p className="text-xs text-gray-500">Payment</p>
+                            <p className="text-lg font-bold text-[#12334A]">Cash</p>
+                        </div>
+
                     </div>
 
-                    <div className='flex items-center gap-5 p-3 border-b-2'>
-                        <i className='text-lg ri-map-pin-2-fill'></i>
-                        <div className='min-w-0'>
-                            <h3 className='text-lg font-medium'>Destination</h3>
-                            <p className='text-sm -mt-1 text-gray-600'>
-                                {ride?.destination || 'Unavailable'}
-                            </p>
-                        </div>
-                    </div>
-
-                    <div className='flex items-center gap-5 p-3'>
-                        <i className='ri-currency-line'></i>
-                        <div>
-                            <h3 className='text-lg font-medium'>
-                                ₹{ride?.fare ?? 0}
-                            </h3>
-                            <p className='text-sm -mt-1 text-gray-600'>Cash</p>
-                        </div>
+                    <div className="mt-3 flex items-center justify-between rounded-xl bg-white p-4 shadow-sm">
+                        <p className="text-sm font-medium text-gray-500">
+                            Collect from rider
+                        </p>
+                        <h3 className="text-3xl font-extrabold text-[#12334A]">
+                            ₹{ride?.fare ?? 0}
+                        </h3>
                     </div>
 
                 </div>
 
-                <div className='mt-10 w-full'>
 
-                    <button
-                        type='button'
-                        onClick={endRide}
-                        disabled={loading}
-                        className='w-full mt-5 flex text-lg justify-center bg-green-600 text-white font-semibold p-3 rounded-lg disabled:opacity-60'
-                    >
-                        {loading ? 'Finishing...' : 'Finish Ride'}
-                    </button>
-
-                </div>
+                {/* FINISH BUTTON */}
+                <button
+                    type="button"
+                    onClick={endRide}
+                    disabled={loading}
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#F15A24] p-4 text-base font-bold text-white shadow-lg shadow-[#F15A24]/30 transition-all duration-200 hover:bg-[#d94d1c] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 lg:mt-auto"
+                >
+                    {loading ? (
+                        <>
+                            <i className="ri-loader-4-line animate-spin text-xl"></i>
+                            Finishing...
+                        </>
+                    ) : (
+                        <>
+                            Finish ride
+                            <i className="ri-check-double-line text-xl"></i>
+                        </>
+                    )}
+                </button>
 
             </div>
 
         </div>
-    )
+
+    </div>
+)
 }
 
 export default FinishRide

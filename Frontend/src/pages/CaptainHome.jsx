@@ -7,6 +7,7 @@ import React, {
 
 import { Link, useNavigate } from 'react-router-dom'
 import axios from 'axios'
+import logo from '../assets/logo.png'
 
 import CaptainDetails from '../components/CaptainDetails'
 import RidePopUp from '../components/RidePopUp'
@@ -467,165 +468,232 @@ const CaptainHome = () => {
 
     /* ================= UI ================= */
 
-    return (
+   return (
 
-        <div className='h-screen w-full overflow-hidden bg-gray-100 relative'>
+    <div className="h-[100dvh] w-full flex flex-col bg-[#F5F7FA] overflow-hidden relative">
 
-            {/* TOP BAR */}
+        {/* ================= HEADER ================= */}
+        <div className="relative shrink-0 overflow-hidden bg-gradient-to-br from-[#12334A] to-[#1d4e6e] px-4 pt-5 pb-12 sm:px-6">
 
-            <div className='absolute top-0 left-0 right-0 z-30 p-4 sm:p-6'>
+            <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-[#F15A24]/20 blur-2xl" />
+            <div className="absolute -left-10 bottom-0 h-28 w-28 rounded-full bg-white/5" />
 
-                <div className='flex items-center justify-between'>
+            <div className="relative flex items-center justify-between">
 
-                    <div className='bg-white rounded-xl px-4 py-2 shadow-md'>
-                        <h1 className='text-xl sm:text-2xl font-bold'>
-                            Saarthi
+                {/* LOGO + BRAND */}
+                <div className="flex items-center gap-3">
+
+                    <div className="h-14 w-14 rounded-2xl bg-white p-1.5 shadow-lg flex items-center justify-center">
+                        <img
+                            src={logo}
+                            alt="Saarthi"
+                            className="h-full w-full object-contain"
+                        />
+                    </div>
+
+                    <div>
+                        <h1 className="text-2xl font-extrabold tracking-tight text-white leading-none">
+                            Saarthi<span className="text-[#F15A24]">.</span>
                         </h1>
+                        <p className="mt-1 text-xs text-white/70">
+                            Captain Dashboard
+                        </p>
+                    </div>
+
+                </div>
+
+                {/* STATUS + LOGOUT */}
+                <div className="flex items-center gap-2">
+
+                    <div className="bg-white/10 backdrop-blur rounded-full px-3 h-10 flex items-center gap-2">
+                        <span className="relative flex h-2.5 w-2.5">
+                            {online && (
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#F15A24] opacity-60" />
+                            )}
+                            <span
+                                className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                                    online ? "bg-[#F15A24]" : "bg-gray-400"
+                                }`}
+                            />
+                        </span>
+                        <span className="text-xs font-semibold text-white">
+                            {online ? "Online" : "Offline"}
+                        </span>
                     </div>
 
                     <Link
-                        to='/captain/logout'
-                        className='h-11 w-11 bg-white rounded-full shadow-md flex items-center justify-center'
+                        to="/captain/logout"
+                        className="h-10 w-10 bg-white rounded-full shadow-md flex items-center justify-center text-[#12334A] transition-all duration-200 hover:bg-[#F15A24] hover:text-white active:scale-95"
                     >
-                        <i className='text-xl ri-logout-box-r-line'></i>
+                        <i className="text-xl ri-logout-box-r-line"></i>
                     </Link>
 
                 </div>
 
             </div>
+        </div>
 
-            {/* MAP */}
 
-            <div className='absolute inset-0'>
-                <img
-                    src='https://thumbs.dreamstime.com/b/city-map-any-kind-digital-info-graphics-print-publication-vector-city-map-267879449.jpg'
-                    alt='Map'
-                    className='w-full h-full object-cover'
-                />
-            </div>
+        {/* ================= SCROLLABLE DASHBOARD ================= */}
+        <div className="relative z-10 -mt-6 flex-1 overflow-y-auto rounded-t-[28px] bg-[#F5F7FA] px-4 pt-5 pb-8 sm:px-6">
 
-            {/* ONLINE STATUS */}
+            <div className="mx-auto w-full max-w-xl space-y-4">
 
-            <div className='absolute top-20 left-4 right-4 z-20'>
+                {/* ONLINE / OFFLINE TOGGLE */}
+                <div
+                    className={`rounded-2xl p-4 shadow-sm transition-colors duration-300 ${
+                        online
+                            ? "bg-[#F15A24]/10 border border-[#F15A24]/30"
+                            : "bg-white border border-gray-100"
+                    }`}
+                >
+                    <div className="flex items-center justify-between gap-3">
 
-                <div className='bg-white rounded-2xl shadow-lg p-4'>
-
-                    <div className='flex items-center justify-between'>
-
-                        <div className='flex items-center gap-3'>
-
+                        <div className="flex items-center gap-3 min-w-0">
                             <div
-                                className={`w-3 h-3 rounded-full ${
-                                    online ? 'bg-green-500' : 'bg-gray-400'
+                                className={`h-11 w-11 shrink-0 rounded-xl flex items-center justify-center ${
+                                    online
+                                        ? "bg-[#F15A24] text-white"
+                                        : "bg-gray-100 text-gray-400"
                                 }`}
-                            />
-
-                            <div>
-
-                                <h3 className='font-semibold'>
-                                    {loading
-                                        ? 'Updating status...'
-                                        : online
-                                            ? 'You are online'
-                                            : 'You are offline'}
-                                </h3>
-
-                                <p className='text-xs text-gray-500'>
-                                    {online
-                                        ? 'You can receive ride requests'
-                                        : 'Go online to receive rides'}
-                                </p>
-
+                            >
+                                <i className="text-2xl ri-steering-2-line"></i>
                             </div>
 
+                            <div className="min-w-0">
+                                <h3 className="font-semibold text-[#12334A] truncate">
+                                    {loading
+                                        ? "Updating status..."
+                                        : online
+                                            ? "You are online"
+                                            : "You are offline"}
+                                </h3>
+                                <p className="text-xs text-gray-500 truncate">
+                                    {online
+                                        ? "Waiting for ride requests nearby"
+                                        : "Go online to start receiving rides"}
+                                </p>
+                            </div>
                         </div>
 
                         <button
-                            type='button'
+                            type="button"
                             onClick={toggleOnlineStatus}
                             disabled={loading}
-                            className={`w-14 h-8 rounded-full p-1 transition ${
-                                online ? 'bg-black' : 'bg-gray-300'
+                            className={`w-14 h-8 shrink-0 rounded-full p-1 transition-all duration-300 ${
+                                online ? "bg-[#12334A]" : "bg-gray-300"
                             } ${
-                                loading
-                                    ? 'opacity-50 cursor-not-allowed'
-                                    : 'cursor-pointer'
+                                loading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
                             }`}
                         >
                             <div
-                                className={`w-6 h-6 bg-white rounded-full transition-transform ${
-                                    online ? 'translate-x-6' : 'translate-x-0'
+                                className={`w-6 h-6 bg-white rounded-full shadow-sm transition-transform duration-300 ${
+                                    online ? "translate-x-6" : "translate-x-0"
                                 }`}
                             />
                         </button>
 
                     </div>
-
                 </div>
 
-            </div>
 
-            {/* DRIVER CARD */}
+                {/* EARNINGS HERO */}
+                <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#12334A] to-[#1d4e6e] p-5 text-white shadow-lg">
 
-            <div className='absolute bottom-0 left-0 right-0 z-20'>
+                    <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-[#F15A24]/20" />
+                    <div className="absolute -right-2 -bottom-10 h-24 w-24 rounded-full bg-white/5" />
 
-                <div className='bg-white rounded-t-[28px] shadow-2xl px-4 pt-4 pb-6 sm:px-6'>
+                    <div className="relative flex items-start justify-between">
+                        <div>
+                            <p className="text-sm text-white/70">Today's earnings</p>
+                            <h2 className="mt-1 text-3xl font-extrabold">₹295.20</h2>
+                        </div>
 
-                    <div className='w-12 h-1 bg-gray-300 rounded-full mx-auto mb-5' />
-
-                    <div className='mb-5'>
-                        <p className='text-sm text-gray-500'>
-                            Today's earnings
-                        </p>
-                        <h2 className='text-2xl sm:text-3xl font-bold'>
-                            ₹295.20
-                        </h2>
+                        <div className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-medium">
+                            <i className="ri-arrow-up-line text-[#F15A24]"></i>
+                            12% vs yesterday
+                        </div>
                     </div>
 
-                    <CaptainDetails />
+                    <div className="relative mt-4 h-1.5 w-full rounded-full bg-white/15">
+                        <div className="h-1.5 w-[59%] rounded-full bg-[#F15A24]" />
+                    </div>
+
+                    <p className="relative mt-2 text-xs text-white/70">
+                        Daily goal ₹500 · 59% done
+                    </p>
+                </div>
+
+
+                {/* QUICK STATS */}
+                <div className="grid grid-cols-3 gap-3">
+
+                    {[
+                        { icon: "ri-route-line", label: "Trips", value: "8" },
+                        { icon: "ri-time-line", label: "Online", value: "5.2h" },
+                        { icon: "ri-star-smile-line", label: "Rating", value: "4.8" }
+                    ].map(stat => (
+                        <div
+                            key={stat.label}
+                            className="bg-white rounded-2xl p-3 shadow-sm text-center"
+                        >
+                            <div className="mx-auto mb-2 h-9 w-9 rounded-full bg-[#F15A24]/10 text-[#F15A24] flex items-center justify-center">
+                                <i className={`text-lg ${stat.icon}`}></i>
+                            </div>
+                            <h4 className="text-lg font-bold text-[#12334A] leading-none">
+                                {stat.value}
+                            </h4>
+                            <p className="mt-1 text-xs text-gray-500">
+                                {stat.label}
+                            </p>
+                        </div>
+                    ))}
 
                 </div>
 
+
+                {/* CAPTAIN DETAILS */}
+                <CaptainDetails />
+
             </div>
-
-            {/* RIDE REQUEST
-                Initial position is inline (not a Tailwind class) so GSAP's
-                transform and Tailwind v4's `translate` property never clash. */}
-
-            <div
-                ref={ridePopupPanelRef}
-                style={{ transform: 'translateY(100%)' }}
-                className='fixed left-0 right-0 bottom-0 z-50 bg-white rounded-t-[28px] shadow-2xl px-4 sm:px-6 py-6 max-h-[90vh] overflow-y-auto'
-            >
-                <RidePopUp
-                    ride={ride}
-                    confirming={confirming}
-                    setRidePopupPanel={setRidePopupPanel}
-                    setConfirmRidePopupPanel={setConfirmRidePopupPanel}
-                    confirmRide={confirmRide}
-                />
-            </div>
-
-            {/* CONFIRM RIDE (OTP) */}
-
-            <div
-                ref={confirmRidePopupPanelRef}
-                style={{ transform: 'translateY(100%)' }}
-                className='fixed left-0 right-0 bottom-0 z-[60] bg-white rounded-t-[28px] shadow-2xl px-4 sm:px-6 py-6 h-[90vh] overflow-y-auto'
-            >
-                <ConfirmRidePopUp
-                    ride={ride}
-                    otp={otp}
-                    setOtp={setOtp}
-                    verifyOtp={verifyOtp}
-                    verifyingOtp={verifyingOtp}
-                    setConfirmRidePopupPanel={setConfirmRidePopupPanel}
-                    setRidePopupPanel={setRidePopupPanel}
-                />
-            </div>
-
         </div>
-    )
+
+
+        {/* ================= RIDE REQUEST POPUP ================= */}
+        <div
+            ref={ridePopupPanelRef}
+            style={{ transform: "translateY(100%)" }}
+            className="fixed left-0 right-0 bottom-0 z-50 bg-white rounded-t-[28px] shadow-2xl px-4 sm:px-6 py-6 max-h-[90vh] overflow-y-auto border-t-4 border-[#F15A24]"
+        >
+            <RidePopUp
+                ride={ride}
+                confirming={confirming}
+                setRidePopupPanel={setRidePopupPanel}
+                setConfirmRidePopupPanel={setConfirmRidePopupPanel}
+                confirmRide={confirmRide}
+            />
+        </div>
+
+
+        {/* ================= CONFIRM RIDE - OTP POPUP ================= */}
+        <div
+            ref={confirmRidePopupPanelRef}
+            style={{ transform: "translateY(100%)" }}
+            className="fixed left-0 right-0 bottom-0 z-[60] bg-white rounded-t-[28px] shadow-2xl px-4 sm:px-6 py-6 h-[90vh] overflow-y-auto border-t-4 border-[#F15A24]"
+        >
+            <ConfirmRidePopUp
+                ride={ride}
+                otp={otp}
+                setOtp={setOtp}
+                verifyOtp={verifyOtp}
+                verifyingOtp={verifyingOtp}
+                setConfirmRidePopupPanel={setConfirmRidePopupPanel}
+                setRidePopupPanel={setRidePopupPanel}
+            />
+        </div>
+
+    </div>
+)
 }
 
 export default CaptainHome

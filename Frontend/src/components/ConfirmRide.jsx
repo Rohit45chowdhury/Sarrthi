@@ -50,111 +50,140 @@ const ConfirmRide = (props) => {
     }
 
     return (
-        <div className="relative w-full h-full overflow-y-auto pb-8">
+    <div className="relative w-full h-full overflow-y-auto pb-8">
 
-            {/* CLOSE BUTTON */}
-            <button
-                type="button"
-                onClick={() => props.setConfirmRidePanel(false)}
-                className="absolute top-0 left-1/2 -translate-x-1/2 w-12 h-8 flex items-center justify-center"
-            >
-                <i className="text-3xl text-gray-400 ri-arrow-down-wide-line"></i>
-            </button>
+        {/* CLOSE BUTTON */}
+        <button
+            type="button"
+            onClick={() => props.setConfirmRidePanel(false)}
+            aria-label="Close confirm ride panel"
+            className="absolute top-0 left-1/2 -translate-x-1/2 w-12 h-8 flex items-center justify-center"
+        >
+            <i className="text-3xl text-gray-300 ri-arrow-down-wide-line"></i>
+        </button>
 
-            {/* HEADING */}
-            <h3 className="text-2xl font-semibold mb-5 pt-7">
-                Confirm your Ride
+        {/* HEADING */}
+        <div className="pt-8 mb-4">
+            <h3 className="text-2xl font-extrabold text-[#12334A]">
+                Confirm your ride
             </h3>
+            <p className="mt-1 text-sm text-gray-500">
+                Check the details before booking
+            </p>
+        </div>
 
-            <div className="flex flex-col items-center">
 
-                {/* VEHICLE IMAGE */}
-                <img
-                    className="h-24 w-36 object-contain"
-                    src={vehicleImage}
-                    alt={vehicleName}
-                />
+        {/* VEHICLE CARD */}
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#12334A] to-[#1d4e6e] p-4 text-white shadow-lg">
 
-                {/* VEHICLE NAME */}
-                <h4 className="text-lg font-semibold capitalize mt-2">
-                    {vehicleName}
-                </h4>
+            <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-[#F15A24]/20" />
+            <div className="absolute -bottom-10 -left-6 h-24 w-24 rounded-full bg-white/5" />
 
-                {/* RIDE DETAILS */}
-                <div className="w-full mt-5">
+            <div className="relative flex items-center gap-4">
 
-                    {/* PICKUP */}
-                    <div className="flex items-center gap-5 p-3 border-b">
+                <div className="flex h-24 w-32 shrink-0 items-center justify-center rounded-xl bg-white">
+                    <img
+                        className="h-20 w-28 object-contain"
+                        src={vehicleImage}
+                        alt={vehicleName}
+                    />
+                </div>
 
-                        <i className="text-xl ri-map-pin-user-fill"></i>
+                <div className="min-w-0 flex-1">
+                    <p className="text-xs uppercase tracking-wide text-white/60">
+                        Your ride
+                    </p>
+                    <h4 className="truncate text-2xl font-extrabold capitalize">
+                        {vehicleName}
+                    </h4>
+                    <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-medium">
+                        <i className="ri-shield-check-fill text-[#F15A24]"></i>
+                        Verified captains
+                    </div>
+                </div>
 
-                        <div className="min-w-0">
+            </div>
+        </div>
 
-                            <h3 className="text-lg font-medium">
-                                Pickup
-                            </h3>
 
-                            <p className="text-sm text-gray-600 break-words">
-                                {props.pickup || 'Pickup location'}
-                            </p>
+        {/* ROUTE CARD */}
+        <div className="mt-4 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
 
-                        </div>
+            <div className="flex gap-4">
 
+                {/* timeline */}
+                <div className="flex flex-col items-center pt-1">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#12334A]/10 text-[#12334A]">
+                        <i className="ri-map-pin-user-fill text-sm"></i>
+                    </span>
+                    <span className="my-1 w-px flex-1 border-l-2 border-dashed border-gray-300" />
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
+                        <i className="ri-map-pin-2-fill text-sm"></i>
+                    </span>
+                </div>
+
+                {/* addresses */}
+                <div className="min-w-0 flex-1 space-y-4">
+
+                    <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                            Pickup
+                        </p>
+                        <p className="mt-0.5 break-words text-sm font-medium text-[#12334A]">
+                            {props.pickup || 'Pickup location'}
+                        </p>
                     </div>
 
-                    {/* DESTINATION */}
-                    <div className="flex items-center gap-5 p-3 border-b">
-
-                        <i className="text-xl ri-map-pin-2-fill"></i>
-
-                        <div className="min-w-0">
-
-                            <h3 className="text-lg font-medium">
-                                Destination
-                            </h3>
-
-                            <p className="text-sm text-gray-600 break-words">
-                                {props.destination || 'Destination'}
-                            </p>
-
-                        </div>
-
-                    </div>
-
-                    {/* FARE */}
-                    <div className="flex items-center gap-5 p-3">
-
-                        <i className="text-xl ri-currency-line"></i>
-
-                        <div>
-
-                            <h3 className="text-lg font-medium">
-                                ₹{rideFare}
-                            </h3>
-
-                            <p className="text-sm text-gray-600">
-                                Cash
-                            </p>
-
-                        </div>
-
+                    <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                            Destination
+                        </p>
+                        <p className="mt-0.5 break-words text-sm font-medium text-[#12334A]">
+                            {props.destination || 'Destination'}
+                        </p>
                     </div>
 
                 </div>
 
-                {/* CONFIRM BUTTON */}
-                <button
-                    type="button"
-                    onClick={handleConfirmRide}
-                    className="w-full mt-3 mb-2 bg-green-600 text-white font-semibold p-3 rounded-lg"
-                >
-                    Confirm Ride
-                </button>
+            </div>
+        </div>
 
+
+        {/* PAYMENT / FARE CARD */}
+        <div className="mt-4 flex items-center justify-between rounded-2xl bg-[#F5F7FA] p-4">
+
+            <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
+                    <i className="ri-money-rupee-circle-line text-2xl"></i>
+                </div>
+                <div>
+                    <p className="text-xs text-gray-500">Payment</p>
+                    <p className="text-sm font-semibold text-[#12334A]">Cash</p>
+                </div>
+            </div>
+
+            <div className="text-right">
+                <p className="text-xs text-gray-500">Total fare</p>
+                <h3 className="text-2xl font-extrabold text-[#12334A]">
+                    ₹{rideFare}
+                </h3>
             </div>
 
         </div>
-    )
+
+
+        {/* CONFIRM BUTTON */}
+        <button
+            type="button"
+            onClick={handleConfirmRide}
+            className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#F15A24] p-4 text-base font-bold text-white shadow-lg shadow-[#F15A24]/30 transition-all duration-200 hover:bg-[#d94d1c] active:scale-[0.98]"
+        >
+            Confirm Ride
+            <i className="ri-arrow-right-line text-xl"></i>
+        </button>
+
+    </div>
+)
 }
 
 export default ConfirmRide

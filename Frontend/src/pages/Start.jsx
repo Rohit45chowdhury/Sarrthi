@@ -1,9 +1,10 @@
+
 import React from "react";
 import { Link } from "react-router-dom";
 
 const Start = () => {
   return (
-    <div className="h-screen w-full overflow-hidden bg-red">
+    <div className="h-screen w-full overflow-hidden bg-[#12334A]">
 
       {/* Hero Section */}
       <div
@@ -14,29 +15,42 @@ const Start = () => {
         }}
       >
 
-        {/* Dark Overlay */}
-        <div className="absolute inset-0 bg-black/20"></div>
+        {/* Dark Navy Overlay */}
+        <div className="absolute inset-0 bg-[#102B40]/40"></div>
 
-        {/* Uber Logo */}
+        {/* Saarthi Logo / Brand */}
         <div className="absolute top-7 left-7 z-10">
-          <h1 className="text-4xl font-bold tracking-tight text-white">
-            Saarthi
+          <h1 className="text-4xl font-extrabold tracking-tight text-white">
+            Saarthi<span className="text-[#F15A24]">.</span>
           </h1>
+          <p className="mt-1 text-xs tracking-[3px] text-white/80">
+            YOUR JOURNEY, OUR PRIORITY
+          </p>
         </div>
 
         {/* Bottom Content */}
         <div className="absolute bottom-0 left-0 z-10 w-full">
 
-          <div className="mx-auto w-full max-w-2xl rounded-t-3xl bg-white px-6 py-8 sm:px-10 sm:py-10">
+          <div className="mx-auto w-full max-w-2xl rounded-t-[32px] border-t-4 border-[#F15A24] bg-white px-6 py-8 shadow-2xl sm:px-10 sm:py-10">
+
+            {/* Small Label */}
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-orange-50 px-4 py-2">
+              <span className="h-2 w-2 rounded-full bg-[#F15A24]"></span>
+              <span className="text-sm font-semibold text-[#F15A24]">
+                RIDE WITH SAARTHI
+              </span>
+            </div>
 
             {/* Heading */}
-            <h2 className="text-3xl font-bold tracking-tight text-black sm:text-4xl">
-              Go anywhere with Saarthi
+            <h2 className="text-3xl font-extrabold leading-tight tracking-tight text-[#12334A] sm:text-4xl">
+              Go anywhere with{" "}
+              <span className="text-[#F15A24]">Saarthi</span>
             </h2>
 
             {/* Description */}
-            <p className="mt-3 text-base leading-6 text-gray-500">
-              Request a ride, get picked up, and go wherever you need to be.
+            <p className="mt-3 text-base leading-7 text-gray-500">
+              Your journey, your destination. Book a ride, get picked up,
+              and travel comfortably with Saarthi.
             </p>
 
             {/* Continue Button */}
@@ -49,15 +63,17 @@ const Start = () => {
                 items-center
                 justify-between
                 rounded-xl
-                bg-black
+                bg-[#12334A]
                 px-5
                 py-4
                 text-lg
                 font-semibold
                 text-white
-                transition
-                duration-200
-                hover:bg-gray-800
+                shadow-lg
+                shadow-[#12334A]/20
+                transition-all
+                duration-300
+                hover:bg-[#F15A24]
                 active:scale-[0.98]
               "
             >

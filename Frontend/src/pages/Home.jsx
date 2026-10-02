@@ -543,217 +543,349 @@ const Home = () => {
 
     return (
 
-        <div className='h-screen relative overflow-hidden'>
+        <div className="h-screen relative overflow-hidden bg-[#F5F7FA]">
 
-            {/* LOGO */}
+    {/* LOGO */}
 
-            <div
-                className={`absolute left-14 top-5 z-50 transition-all duration-300 ${
-                    activePanel === 'search' && !panelOpen
-                        ? 'opacity-100 translate-y-0'
-                        : 'opacity-0 -translate-y-3 pointer-events-none'
-                }`}
+    <div
+        className={`absolute left-14 top-5 z-50 transition-all duration-300 ${
+            activePanel === 'search' && !panelOpen
+                ? 'opacity-100 translate-y-0'
+                : 'opacity-0 -translate-y-3 pointer-events-none'
+        }`}
+    >
+        <h1 className="text-3xl font-extrabold tracking-tight text-[#12334A]">
+            Saarthi<span className="text-[#F15A24]">.</span>
+        </h1>
+    </div>
+
+
+    {/* LOGOUT */}
+
+    <button
+        type="button"
+        onClick={handleLogout}
+        className="
+            absolute right-5 top-5 z-50
+            h-11 w-11
+            bg-white
+            rounded-full
+            shadow-md
+            flex items-center justify-center
+            text-[#12334A]
+            transition-all duration-200
+            hover:bg-[#F15A24]
+            hover:text-white
+            active:scale-95
+        "
+    >
+        <i className="text-xl ri-logout-box-r-line" />
+    </button>
+
+
+    {/* MAP */}
+
+    <div className="h-screen w-screen">
+        <LiveTracking />
+    </div>
+
+
+    {/* SEARCH */}
+
+    <div
+        className={`${
+            activePanel === 'search' ? 'flex' : 'hidden'
+        } flex-col justify-end h-screen absolute top-0 left-0 w-full pointer-events-none`}
+    >
+
+        <div
+            className="
+                h-[30%]
+                p-6
+                bg-white
+                relative
+                pointer-events-auto
+                rounded-t-[28px]
+                shadow-[0_-8px_30px_rgba(18,51,74,0.08)]
+            "
+        >
+
+            {/* Close */}
+
+            <h5
+                ref={panelCloseRef}
+                onClick={() => setPanelOpen(false)}
+                className="
+                    absolute
+                    opacity-0
+                    right-6
+                    top-6
+                    text-2xl
+                    cursor-pointer
+                    text-[#12334A]
+                    hover:text-[#F15A24]
+                    transition-colors
+                "
             >
-                <h1 className='text-3xl font-extrabold'>
-                    Saarthi
-                </h1>
+                <i className="ri-arrow-down-wide-line" />
+            </h5>
+
+
+            {/* Heading */}
+
+            <div className="flex items-center gap-2">
+
+                <span className="w-2 h-7 rounded-full bg-[#F15A24]" />
+
+                <h4 className="text-2xl font-bold text-[#12334A]">
+                    Find a trip
+                </h4>
+
             </div>
 
-            {/* LOGOUT */}
 
-            <button
-                type='button'
-                onClick={handleLogout}
-                className='absolute right-5 top-5 z-50 h-11 w-11 bg-white rounded-full shadow-md flex items-center justify-center'
-            >
-                <i className='text-xl ri-logout-box-r-line' />
-            </button>
-
-            {/* MAP */}
-
-            <div className='h-screen w-screen'>
-                <LiveTracking />
-            </div>
-
-            {/* SEARCH (always mounted, hidden when another sheet is active) */}
-
-            <div
-                className={`${
-                    activePanel === 'search' ? 'flex' : 'hidden'
-                } flex-col justify-end h-screen absolute top-0 left-0 w-full pointer-events-none`}
+            <form
+                className="relative py-3"
+                onSubmit={e => e.preventDefault()}
             >
 
-                <div className='h-[30%] p-6 bg-white relative pointer-events-auto'>
+                {/* Connecting Line */}
 
-                    <h5
-                        ref={panelCloseRef}
-                        onClick={() => setPanelOpen(false)}
-                        className='absolute opacity-0 right-6 top-6 text-2xl cursor-pointer'
-                    >
-                        <i className='ri-arrow-down-wide-line' />
-                    </h5>
+                <div
+                    className="
+                        line
+                        absolute
+                        h-16
+                        w-1
+                        top-[50%]
+                        -translate-y-1/2
+                        left-5
+                        bg-[#12334A]
+                        rounded-full
+                    "
+                />
 
-                    <h4 className='text-2xl font-semibold'>
-                        Find a trip
-                    </h4>
 
-                    <form
-                        className='relative py-3'
-                        onSubmit={e => e.preventDefault()}
-                    >
+                {/* PICKUP */}
 
-                        <div className='line absolute h-16 w-1 top-[50%] -translate-y-1/2 left-5 bg-gray-700 rounded-full' />
+                <div className="relative">
 
-                        {/* PICKUP */}
+                    <input
+                        value={pickup}
+                        onClick={focusField('pickup')}
+                        onChange={handleChange(
+                            'pickup',
+                            setPickup
+                        )}
+                        className={`
+                            ${inputClass}
+                            pr-14
+                            border-gray-300
+                            text-[#12334A]
+                            focus:border-[#F15A24]
+                            focus:ring-2
+                            focus:ring-[#F15A24]/15
+                        `}
+                        type="text"
+                        placeholder="Add a pick-up location"
+                    />
 
-                        <div className='relative'>
 
-                            <input
-                                value={pickup}
-                                onClick={focusField('pickup')}
-                                onChange={handleChange('pickup', setPickup)}
-                                className={`${inputClass} pr-14`}
-                                type='text'
-                                placeholder='Add a pick-up location'
-                            />
-
-                            <button
-                                type='button'
-                                disabled={locating}
-                                onClick={fetchCurrentLocation}
-                                className='absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center rounded-full hover:bg-gray-200'
-                            >
-                                <i
-                                    className={`text-xl ${
-                                        locating
-                                            ? 'ri-loader-4-line animate-spin'
-                                            : 'ri-crosshair-2-line'
-                                    }`}
-                                />
-                            </button>
-
-                        </div>
-
-                        {/* DESTINATION */}
-
-                        <input
-                            value={destination}
-                            onClick={focusField('destination')}
-                            onChange={handleChange(
-                                'destination',
-                                setDestination
-                            )}
-                            className={`${inputClass} mt-3`}
-                            type='text'
-                            placeholder='Enter your destination'
-                        />
-
-                    </form>
+                    {/* Current Location */}
 
                     <button
-                        type='button'
-                        onClick={findTrip}
-                        className='bg-black text-white px-4 py-2 rounded-lg mt-3 w-full'
+                        type="button"
+                        disabled={locating}
+                        onClick={fetchCurrentLocation}
+                        className="
+                            absolute
+                            right-3
+                            top-1/2
+                            -translate-y-1/2
+                            w-9
+                            h-9
+                            flex
+                            items-center
+                            justify-center
+                            rounded-full
+                            text-[#12334A]
+                            hover:bg-orange-50
+                            hover:text-[#F15A24]
+                            transition-colors
+                            disabled:opacity-50
+                        "
                     >
-                        Find Trip
+
+                        <i
+                            className={`text-xl ${
+                                locating
+                                    ? 'ri-loader-4-line animate-spin text-[#F15A24]'
+                                    : 'ri-crosshair-2-line'
+                            }`}
+                        />
+
                     </button>
 
                 </div>
 
-                {/* SUGGESTIONS */}
 
-                <div
-                    ref={panelRef}
-                    className='bg-white h-0 overflow-y-auto pointer-events-auto'
-                >
-                    <LocationSearchPanel
-                        suggestions={suggestions[activeField] || []}
-                        loading={suggestionsLoading}
-                        setPickup={handlePickupSelect}
-                        setDestination={handleDestinationSelect}
-                        activeField={activeField}
-                    />
-                </div>
+                {/* DESTINATION */}
 
-            </div>
-
-            {/* BACKDROP */}
-
-            <div
-                className={`fixed inset-0 z-[5] bg-black transition-opacity ${
-                    activePanel === 'search'
-                        ? 'opacity-0 pointer-events-none'
-                        : 'opacity-30'
-                }`}
-            />
-
-            {/* VEHICLE */}
-
-            <div
-                ref={refs.vehicle}
-                style={hiddenSheetStyle}
-                className={`${sheet} py-10`}
-            >
-                <VehiclePanel
-                    selectVehicle={setVehicleType}
-                    fare={fare}
-                    setConfirmRidePanel={setConfirmRidePanel}
-                    setVehiclePanel={setVehiclePanel}
+                <input
+                    value={destination}
+                    onClick={focusField('destination')}
+                    onChange={handleChange(
+                        'destination',
+                        setDestination
+                    )}
+                    className={`
+                        ${inputClass}
+                        mt-3
+                        border-gray-300
+                        text-[#12334A]
+                        focus:border-[#F15A24]
+                        focus:ring-2
+                        focus:ring-[#F15A24]/15
+                    `}
+                    type="text"
+                    placeholder="Enter your destination"
                 />
-            </div>
 
-            {/* CONFIRM RIDE */}
+            </form>
 
-            <div
-                ref={refs.confirm}
-                style={hiddenSheetStyle}
-                className={`${sheet} py-6`}
+
+            {/* FIND TRIP */}
+
+            <button
+                type="button"
+                onClick={findTrip}
+                className="
+                    bg-[#12334A]
+                    text-white
+                    px-4
+                    py-3
+                    rounded-xl
+                    mt-3
+                    w-full
+                    font-semibold
+                    transition-all
+                    duration-300
+                    hover:bg-[#F15A24]
+                    active:scale-[0.98]
+                    shadow-md
+                    shadow-[#12334A]/15
+                "
             >
-                <ConfirmRide
-                    pickup={pickup}
-                    destination={destination}
-                    fare={fare}
-                    vehicleType={vehicleType}
-                    creatingRide={creatingRide}
-                    setConfirmRidePanel={setConfirmRidePanel}
-                    setVehicleFound={setVehicleFound}
-                    createRide={handleConfirmRide}
-                />
-            </div>
-
-            {/* LOOKING FOR DRIVER */}
-
-            <div
-                ref={refs.looking}
-                style={hiddenSheetStyle}
-                className={`${sheet} py-6`}
-            >
-                <LookingForDriver
-                    ride={ride}
-                    pickup={pickup}
-                    destination={destination}
-                    fare={fare}
-                    vehicleType={vehicleType}
-                    setVehicleFound={setVehicleFound}
-                />
-            </div>
-
-            {/* WAITING FOR DRIVER */}
-
-            <div
-                ref={refs.waiting}
-                style={hiddenSheetStyle}
-                className={`${sheet} py-6`}
-            >
-                <WaitingForDriver
-                    ride={ride}
-                    setVehicleFound={setVehicleFound}
-                    setWaitingForDriver={setWaitingForDriver}
-                    waitingForDriver={waitingForDriver}
-                />
-            </div>
+                Find Trip
+            </button>
 
         </div>
+
+
+        {/* SUGGESTIONS */}
+
+        <div
+            ref={panelRef}
+            className="
+                bg-white
+                h-0
+                overflow-y-auto
+                pointer-events-auto
+            "
+        >
+            <LocationSearchPanel
+                suggestions={suggestions[activeField] || []}
+                loading={suggestionsLoading}
+                setPickup={handlePickupSelect}
+                setDestination={handleDestinationSelect}
+                activeField={activeField}
+            />
+        </div>
+
+    </div>
+
+
+    {/* BACKDROP */}
+
+    <div
+        className={`fixed inset-0 z-[5] bg-[#12334A] transition-opacity ${
+            activePanel === 'search'
+                ? 'opacity-0 pointer-events-none'
+                : 'opacity-30'
+        }`}
+    />
+
+
+    {/* VEHICLE */}
+
+    <div
+        ref={refs.vehicle}
+        style={hiddenSheetStyle}
+        className={`${sheet} py-10 bg-white`}
+    >
+        <VehiclePanel
+            selectVehicle={setVehicleType}
+            fare={fare}
+            setConfirmRidePanel={setConfirmRidePanel}
+            setVehiclePanel={setVehiclePanel}
+        />
+    </div>
+
+
+    {/* CONFIRM RIDE */}
+
+    <div
+        ref={refs.confirm}
+        style={hiddenSheetStyle}
+        className={`${sheet} py-6 bg-white`}
+    >
+        <ConfirmRide
+            pickup={pickup}
+            destination={destination}
+            fare={fare}
+            vehicleType={vehicleType}
+            creatingRide={creatingRide}
+            setConfirmRidePanel={setConfirmRidePanel}
+            setVehicleFound={setVehicleFound}
+            createRide={handleConfirmRide}
+        />
+    </div>
+
+
+    {/* LOOKING FOR DRIVER */}
+
+    <div
+        ref={refs.looking}
+        style={hiddenSheetStyle}
+        className={`${sheet} py-6 bg-white`}
+    >
+        <LookingForDriver
+            ride={ride}
+            pickup={pickup}
+            destination={destination}
+            fare={fare}
+            vehicleType={vehicleType}
+            setVehicleFound={setVehicleFound}
+        />
+    </div>
+
+
+    {/* WAITING FOR DRIVER */}
+
+    <div
+        ref={refs.waiting}
+        style={hiddenSheetStyle}
+        className={`${sheet} py-6 bg-white`}
+    >
+        <WaitingForDriver
+            ride={ride}
+            setVehicleFound={setVehicleFound}
+            setWaitingForDriver={setWaitingForDriver}
+            waitingForDriver={waitingForDriver}
+        />
+    </div>
+
+</div>
     )
 }
 

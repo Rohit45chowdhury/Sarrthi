@@ -1,4 +1,3 @@
-
 import React, { useContext } from 'react'
 import { CaptainDataContext } from '../context/CapatainContext'
 
@@ -26,10 +25,7 @@ const CaptainDetails = () => {
         )
     }
 
-    // Debug
-    console.log('CaptainDetails captain:', captain)
-
-    // Captain name
+    // Captain data
     const captainData =
         captain?.captain ||
         captain?.data ||
@@ -51,101 +47,178 @@ const CaptainDetails = () => {
 
     const captainName = `${firstName} ${lastName}`.trim() || 'Captain'
 
-    // Get vehicle details
+    // Profile image (checks common field names, falls back to initial letter)
+    const profileImage =
+        captainData?.profileImage ||
+        captainData?.profilePhoto ||
+        captainData?.profilePic ||
+        captainData?.avatar ||
+        captainData?.image ||
+        captainData?.photo ||
+        ''
+
+    // Vehicle details
     const vehicle =
         captain?.vehicle ||
         captain?.captain?.vehicle ||
         captain?.data?.vehicle ||
         {}
 
-    console.log('CaptainDetails vehicle:', JSON.stringify(vehicle, null, 2))
-
-    // Vehicle type
     const vehicleType =
         vehicle?.vehicleType ||
         vehicle?.type ||
         'N/A'
 
-    // Vehicle images
     const vehicleImages = {
-        car: 'https://cdn-icons-png.flaticon.com/512/741/741407.png',
+        car: 'https://i.pinimg.com/474x/8d/21/7b/8d217b1000b642005fea7b6fd6c3d967.jpg',
 
         motorcycle:
-            'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQGSkUV9W8j9iU5x4YWH6FDZMBQESs9W5eZ-WAGYUUi-w&s=10',
+            'https://img.autocarpro.in/autocarpro/4d3ef0c9-c75e-46a3-af25-fab216e0bfe8_Untitled.jpg?w=750&h=490&q=75&c=1',
 
         auto:
             'https://png.pngtree.com/png-clipart/20250516/original/pngtree-colorful-indian-auto-rickshaw-cartoon-illustration-png-image_21002796.png'
     }
 
     const vehicleImage =
-        vehicleImages[vehicleType.toLowerCase()] ||
+        vehicleImages[String(vehicleType).toLowerCase()] ||
         vehicleImages.car
 
-    // Vehicle color
     const color =
         vehicle?.color ||
         vehicle?.colour ||
         'N/A'
 
-    // Vehicle plate
     const plate =
         vehicle?.plate ||
         vehicle?.plateNumber ||
         vehicle?.licensePlate ||
         'N/A'
 
-    // Vehicle capacity
     const capacity =
         vehicle?.capacity ||
         vehicle?.passengerCapacity ||
         'N/A'
 
     return (
-        <div className='w-full bg-gray-100 rounded-2xl p-4'>
+        <div className="w-full overflow-hidden rounded-3xl bg-white shadow-lg">
 
-            {/* Captain Name */}
-            <div className='mb-4'>
-                <h2 className='text-2xl font-bold text-gray-900'>
-                     {captainName}
-                </h2>
-                <p className='text-sm text-gray-500'>
-                    Your vehicle details
-                </p>
+            {/* HEADER */}
+            <div className="relative bg-gradient-to-br from-[#12334A] to-[#1d4e6e] p-5 text-white">
+
+                <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-[#F15A24]/20" />
+                <div className="absolute -bottom-10 right-10 h-24 w-24 rounded-full bg-white/5" />
+
+                <div className="relative flex items-center gap-4">
+
+                    {/* PROFILE IMAGE */}
+                    <div className="relative shrink-0">
+
+                        <div className="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-white text-3xl font-extrabold text-[#12334A] ring-4 ring-[#F15A24] ring-offset-2 ring-offset-[#12334A]">
+
+                            {/* fallback initial (shows if no image or image fails) */}
+                            <span>{captainName.charAt(0).toUpperCase()}</span>
+
+                            {profileImage && (
+                                <img
+                                    src={profileImage}
+                                    alt={captainName}
+                                    className="absolute inset-0 h-full w-full object-cover"
+                                    onError={e => {
+                                        e.currentTarget.style.display = 'none'
+                                    }}
+                                />
+                            )}
+
+                        </div>
+
+                        {/* verified tick on avatar */}
+                        <div className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full border-2 border-[#12334A] bg-[#F15A24] text-sm text-white">
+                            <i className="ri-check-line"></i>
+                        </div>
+
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                        <p className="text-xs text-white/70">Saarthi Captain</p>
+                        <h2 className="truncate text-xl font-bold capitalize">
+                            {captainName}
+                        </h2>
+
+                        <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold">
+                            <i className="ri-shield-check-fill text-[#F15A24]"></i>
+                            Verified
+                        </div>
+                    </div>
+
+                </div>
             </div>
 
-            <div className='flex items-center gap-5'>
 
-                {/* Vehicle Image */}
+            {/* VEHICLE SECTION */}
+            <div className="p-5">
 
-                <div className='w-28 h-24 bg-white rounded-xl flex items-center justify-center shrink-0'>
+                <div className="flex items-center gap-4">
 
-                    <img
-                        src={vehicleImage}
-                        alt={vehicleType}
-                        className='w-24 h-20 object-contain'
-                    />
+                    <div className="flex h-24 w-28 shrink-0 items-center justify-center rounded-2xl bg-[#F5F7FA]">
+                        <img
+                            src={vehicleImage}
+                            alt={vehicleType}
+                            className="h-20 w-24 object-contain"
+                        />
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+
+                        <p className="text-xs uppercase tracking-wide text-gray-400">
+                            Your vehicle
+                        </p>
+
+                        <h3 className="truncate text-2xl font-extrabold capitalize text-[#12334A]">
+                            {vehicleType}
+                        </h3>
+
+                        {/* NUMBER PLATE */}
+                        <div className="mt-2 inline-flex items-center rounded-md border-2 border-[#12334A] bg-white px-3 py-1">
+                            <span className="text-sm font-extrabold uppercase tracking-widest text-[#12334A]">
+                                {plate}
+                            </span>
+                        </div>
+
+                    </div>
 
                 </div>
 
-                {/* Vehicle Details */}
 
-                <div className='flex flex-col gap-1 min-w-0'>
+                {/* DIVIDER */}
+                <div className="my-5 h-px w-full bg-gray-100" />
 
-                    <h3 className='text-xl font-semibold capitalize'>
-                        {vehicleType}
-                    </h3>
 
-                    <p className='text-sm text-gray-600'>
-                        Color: {color}
-                    </p>
+                {/* INFO GRID */}
+                <div className="grid grid-cols-2 gap-3">
 
-                    <p className='text-sm font-semibold'>
-                        Plate: {plate}
-                    </p>
+                    <div className="flex items-center gap-3 rounded-2xl bg-[#F5F7FA] p-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
+                            <i className="ri-palette-line text-xl"></i>
+                        </div>
+                        <div className="min-w-0">
+                            <p className="text-[11px] text-gray-400">Color</p>
+                            <p className="truncate text-sm font-semibold capitalize text-[#12334A]">
+                                {color}
+                            </p>
+                        </div>
+                    </div>
 
-                    <p className='text-sm text-gray-600'>
-                        Capacity: {capacity}
-                    </p>
+                    <div className="flex items-center gap-3 rounded-2xl bg-[#F5F7FA] p-3">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
+                            <i className="ri-group-line text-xl"></i>
+                        </div>
+                        <div className="min-w-0">
+                            <p className="text-[11px] text-gray-400">Capacity</p>
+                            <p className="truncate text-sm font-semibold text-[#12334A]">
+                                {capacity} {capacity !== 'N/A' ? 'seats' : ''}
+                            </p>
+                        </div>
+                    </div>
 
                 </div>
 
@@ -156,4 +229,3 @@ const CaptainDetails = () => {
 }
 
 export default CaptainDetails
-
