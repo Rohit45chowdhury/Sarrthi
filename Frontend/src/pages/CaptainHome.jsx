@@ -419,6 +419,8 @@ const CaptainHome = () => {
                 setRidePopupPanel(false)
                 setOtp('')
 
+                sessionStorage.setItem('activeRide', JSON.stringify(response.data))
+
                 navigate('/captain-riding', {
                     state: { ride: response.data }
                 })
