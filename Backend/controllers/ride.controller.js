@@ -1,6 +1,7 @@
 const rideService = require('../services/ride.service');
 const { validationResult } = require('express-validator');
-const { sendMessageToSocketId } = require('../socket');
+const { sendMessageToSocketId, trackCaptainRide } = require('../socket');
+const mapService = require('../services/maps.service');
 
 // Remove otp before sending a ride to a captain
 function withoutOtp(ride) {
@@ -97,18 +98,37 @@ module.exports.confirmRide = async (req, res) => {
 
         console.log('RIDE ACCEPTED:', ride._id, 'captain:', ride.captain?._id);
 
+        // LIVE TRACKING: from now on the captain's location updates are also
+        // sent to this ride's passenger ("captain-location-update").
+        trackCaptainRide({
+            captainId: ride.captain?._id,
+            rideId: ride._id,
+            userId: ride.user?._id
+        });
+
+        // Pickup coordinates for the live map. The address was already
+        // geocoded when the ride was created, so this normally comes from the
+        // cache. If it fails the ride still works (the map then tries itself).
+        let pickupCoordinates = null;
+        try {
+            const point = await mapService.getAddressCoordinates(ride.pickup);
+            pickupCoordinates = { ltd: point.ltd, lng: point.lng };
+        } catch (err) {
+            console.error('PICKUP COORDINATES ERROR:', err.message);
+        }
+
         if (ride.user && ride.user.socketId) {
             // User gets the full ride INCLUDING otp (they must tell it to the captain)
             sendMessageToSocketId(ride.user.socketId, {
                 event: 'ride-accepted',
-                data: ride.toObject()
+                data: { ...ride.toObject(), pickupCoordinates }
             });
         } else {
             console.log('User socketId not available');
         }
 
         // Captain must NOT receive the otp
-        return res.status(200).json(withoutOtp(ride));
+        return res.status(200).json({ ...withoutOtp(ride), pickupCoordinates });
     } catch (err) {
         console.error('CONFIRM RIDE ERROR:', err);
         return res.status(500).json({ message: err.message });

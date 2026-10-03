@@ -1,4 +1,3 @@
-
 import React from 'react'
 
 const LookingForDriver = (props) => {
@@ -27,6 +26,8 @@ const LookingForDriver = (props) => {
     const selectedVehicle =
         vehicleData[props.vehicleType] || vehicleData.car
 
+    const noDriverFound = !!props.noDriverFound
+
     return (
     <div className="relative w-full max-h-[75vh] overflow-y-auto pb-6">
 
@@ -43,126 +44,174 @@ const LookingForDriver = (props) => {
         {/* HEADING */}
         <div className="pt-8 mb-4">
             <h3 className="text-2xl font-extrabold text-[#12334A]">
-                Looking for a driver
+                {noDriverFound
+                    ? 'No drivers available'
+                    : 'Looking for a driver'}
             </h3>
             <p className="mt-1 text-sm text-gray-500">
-                Hang tight, we are matching you with a captain
+                {noDriverFound
+                    ? 'Sorry, no captains are available in your area right now'
+                    : 'Hang tight, we are matching you with a captain'}
             </p>
         </div>
 
 
-        {/* RADAR SEARCH CARD */}
-        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#12334A] to-[#1d4e6e] px-4 py-6 text-white shadow-lg">
+        {noDriverFound ? (
 
-            <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-[#F15A24]/20" />
-            <div className="absolute -bottom-10 -left-6 h-24 w-24 rounded-full bg-white/5" />
+            /* NO DRIVER CARD */
+            <div className="rounded-2xl bg-[#F5F7FA] px-4 py-8 text-center">
 
-            <div className="relative flex flex-col items-center">
-
-                <div className="relative flex h-40 w-40 items-center justify-center">
-
-                    {/* radar rings */}
-                    <span className="absolute h-28 w-28 animate-ping rounded-full border-2 border-[#F15A24]/60" />
-                    <span className="absolute h-36 w-36 rounded-full border border-white/10" />
-                    <span className="absolute h-40 w-40 rounded-full border border-white/5" />
-
-                    {/* vehicle */}
-                    <div className="relative flex h-24 w-24 items-center justify-center rounded-full bg-white shadow-xl ring-4 ring-white/10">
-                        <img
-                            className="h-16 w-20 object-contain"
-                            src={selectedVehicle.image}
-                            alt={selectedVehicle.name}
-                        />
-                    </div>
-
+                <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
+                    <i className="ri-user-unfollow-line text-4xl"></i>
                 </div>
 
-                <h4 className="mt-2 text-lg font-bold capitalize">
-                    {selectedVehicle.name}
+                <h4 className="mt-3 text-lg font-bold text-[#12334A]">
+                    No {selectedVehicle.name.toLowerCase()} driver found
                 </h4>
 
-                <p className="mt-1 flex items-center gap-2 text-sm text-white/80">
-                    <i className="ri-loader-4-line animate-spin text-lg text-[#F15A24]"></i>
-                    Finding a nearby {selectedVehicle.name.toLowerCase()} driver...
+                <p className="mt-1 text-sm text-gray-500">
+                    Please try again in a few minutes or choose another vehicle.
                 </p>
 
-            </div>
-        </div>
+                <div className="mt-5 flex gap-3">
+                    <button
+                        type="button"
+                        onClick={() => props.setVehicleFound(false)}
+                        className="w-1/2 rounded-xl border border-gray-300 bg-white py-3 font-semibold text-[#12334A]"
+                    >
+                        Cancel
+                    </button>
 
-
-        {/* ROUTE CARD */}
-        <div className="mt-4 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
-
-            <div className="flex gap-4">
-
-                {/* timeline */}
-                <div className="flex flex-col items-center pt-1">
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#12334A]/10 text-[#12334A]">
-                        <i className="ri-map-pin-user-fill text-sm"></i>
-                    </span>
-                    <span className="my-1 w-px flex-1 border-l-2 border-dashed border-gray-300" />
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
-                        <i className="ri-map-pin-2-fill text-sm"></i>
-                    </span>
+                    <button
+                        type="button"
+                        onClick={props.onRetry}
+                        className="w-1/2 rounded-xl bg-[#12334A] py-3 font-semibold text-white active:scale-[0.98]"
+                    >
+                        Try again
+                    </button>
                 </div>
 
-                {/* addresses */}
-                <div className="min-w-0 flex-1 space-y-4">
+            </div>
 
-                    <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
-                            Pickup
-                        </p>
-                        <p className="mt-0.5 break-words text-sm font-medium text-[#12334A]">
-                            {props.pickup ||
-                                props.ride?.pickup ||
-                                'Pickup location'}
-                        </p>
+        ) : (
+
+            /* RADAR SEARCH CARD */
+            <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#12334A] to-[#1d4e6e] px-4 py-6 text-white shadow-lg">
+
+                <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-[#F15A24]/20" />
+                <div className="absolute -bottom-10 -left-6 h-24 w-24 rounded-full bg-white/5" />
+
+                <div className="relative flex flex-col items-center">
+
+                    <div className="relative flex h-40 w-40 items-center justify-center">
+
+                        {/* radar rings */}
+                        <span className="absolute h-28 w-28 animate-ping rounded-full border-2 border-[#F15A24]/60" />
+                        <span className="absolute h-36 w-36 rounded-full border border-white/10" />
+                        <span className="absolute h-40 w-40 rounded-full border border-white/5" />
+
+                        {/* vehicle */}
+                        <div className="relative flex h-24 w-24 items-center justify-center rounded-full bg-white shadow-xl ring-4 ring-white/10">
+                            <img
+                                className="h-16 w-20 object-contain"
+                                src={selectedVehicle.image}
+                                alt={selectedVehicle.name}
+                            />
+                        </div>
+
                     </div>
 
-                    <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
-                            Destination
-                        </p>
-                        <p className="mt-0.5 break-words text-sm font-medium text-[#12334A]">
-                            {props.destination ||
-                                props.ride?.destination ||
-                                'Destination'}
-                        </p>
+                    <h4 className="mt-2 text-lg font-bold capitalize">
+                        {selectedVehicle.name}
+                    </h4>
+
+                    <p className="mt-1 flex items-center gap-2 text-sm text-white/80">
+                        <i className="ri-loader-4-line animate-spin text-lg text-[#F15A24]"></i>
+                        Finding a nearby {selectedVehicle.name.toLowerCase()} driver...
+                    </p>
+
+                </div>
+            </div>
+
+        )}
+
+
+        {/* ROUTE CARD + FARE CARD (hidden when no driver is found) */}
+        {!noDriverFound && (
+            <>
+                {/* ROUTE CARD */}
+                <div className="mt-4 rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+
+                    <div className="flex gap-4">
+
+                        {/* timeline */}
+                        <div className="flex flex-col items-center pt-1">
+                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#12334A]/10 text-[#12334A]">
+                                <i className="ri-map-pin-user-fill text-sm"></i>
+                            </span>
+                            <span className="my-1 w-px flex-1 border-l-2 border-dashed border-gray-300" />
+                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
+                                <i className="ri-map-pin-2-fill text-sm"></i>
+                            </span>
+                        </div>
+
+                        {/* addresses */}
+                        <div className="min-w-0 flex-1 space-y-4">
+
+                            <div>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                                    Pickup
+                                </p>
+                                <p className="mt-0.5 break-words text-sm font-medium text-[#12334A]">
+                                    {props.pickup ||
+                                        props.ride?.pickup ||
+                                        'Pickup location'}
+                                </p>
+                            </div>
+
+                            <div>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                                    Destination
+                                </p>
+                                <p className="mt-0.5 break-words text-sm font-medium text-[#12334A]">
+                                    {props.destination ||
+                                        props.ride?.destination ||
+                                        'Destination'}
+                                </p>
+                            </div>
+
+                        </div>
+
+                    </div>
+                </div>
+
+
+                {/* FARE CARD */}
+                <div className="mt-4 flex items-center justify-between rounded-2xl bg-[#F5F7FA] p-4">
+
+                    <div className="flex items-center gap-3">
+                        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
+                            <i className="ri-money-rupee-circle-line text-2xl"></i>
+                        </div>
+                        <div>
+                            <p className="text-xs text-gray-500">Payment</p>
+                            <p className="text-sm font-semibold text-[#12334A]">Cash</p>
+                        </div>
+                    </div>
+
+                    <div className="text-right">
+                        <p className="text-xs text-gray-500">Total fare</p>
+                        <h3 className="text-2xl font-extrabold text-[#12334A]">
+                            ₹{rideFare}
+                        </h3>
                     </div>
 
                 </div>
-
-            </div>
-        </div>
-
-
-        {/* FARE CARD */}
-        <div className="mt-4 flex items-center justify-between rounded-2xl bg-[#F5F7FA] p-4">
-
-            <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
-                    <i className="ri-money-rupee-circle-line text-2xl"></i>
-                </div>
-                <div>
-                    <p className="text-xs text-gray-500">Payment</p>
-                    <p className="text-sm font-semibold text-[#12334A]">Cash</p>
-                </div>
-            </div>
-
-            <div className="text-right">
-                <p className="text-xs text-gray-500">Total fare</p>
-                <h3 className="text-2xl font-extrabold text-[#12334A]">
-                    ₹{rideFare}
-                </h3>
-            </div>
-
-        </div>
+            </>
+        )}
 
     </div>
 )
 }
 
 export default LookingForDriver
-
-

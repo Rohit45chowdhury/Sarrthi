@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import logo from "../assets/logo.png";
@@ -16,98 +17,29 @@ const Start = () => {
   /* ================= LOADING PAGE ================= */
   if (loading) {
     return (
-      <div className="h-screen w-full overflow-hidden bg-[#12334A] flex items-center justify-center">
+      <div className="h-screen w-full overflow-hidden bg-white flex items-center justify-center">
 
-        <div className="flex flex-col items-center justify-center">
+        {/* Full Screen Logo */}
+        <div className="relative flex h-full w-full items-center justify-center">
 
-          {/* Logo */}
-          <div
+          <img
+            src={logo}
+            alt="Saarthi"
             className="
-              h-28 w-28
-              sm:h-32 sm:w-32
-              lg:h-36 lg:w-36
-              rounded-[28px]
-              bg-white
-              p-4
-              shadow-2xl
+              h-[65vh]
+              w-[65vw]
+              max-h-[500px]
+              max-w-[500px]
+              object-contain
               animate-pulse
             "
-          >
-            <img
-              src={logo}
-              alt="Saarthi"
-              className="h-full w-full object-contain"
-            />
-          </div>
-
-          {/* Brand */}
-          <h1
-            className="
-              mt-6
-              text-4xl
-              sm:text-5xl
-              font-extrabold
-              tracking-tight
-              text-white
-            "
-          >
-            Saarthi<span className="text-[#F15A24]">.</span>
-          </h1>
-
-          {/* Tagline */}
-          <p
-            className="
-              mt-2
-              text-[10px]
-              sm:text-xs
-              tracking-[4px]
-              text-white/60
-              text-center
-            "
-          >
-            YOUR JOURNEY, OUR PRIORITY
-          </p>
-
-          {/* Loading dots */}
-          <div className="mt-8 flex items-center gap-2">
-
-            <span
-              className="
-                h-2.5 w-2.5
-                rounded-full
-                bg-[#F15A24]
-                animate-bounce
-              "
-            />
-
-            <span
-              className="
-                h-2.5 w-2.5
-                rounded-full
-                bg-[#F15A24]
-                animate-bounce
-                [animation-delay:150ms]
-              "
-            />
-
-            <span
-              className="
-                h-2.5 w-2.5
-                rounded-full
-                bg-[#F15A24]
-                animate-bounce
-                [animation-delay:300ms]
-              "
-            />
-
-          </div>
+          />
 
         </div>
 
       </div>
     );
   }
-
 
   /* ================= START PAGE ================= */
 
@@ -131,7 +63,6 @@ const Start = () => {
 
         {/* Dark Navy Overlay */}
         <div className="absolute inset-0 bg-[#102B40]/40"></div>
-
 
         {/* ================= SAARTHI BRAND ================= */}
         <div
@@ -167,7 +98,6 @@ const Start = () => {
               />
             </div>
 
-
             <div>
 
               <h1
@@ -199,7 +129,6 @@ const Start = () => {
           </div>
 
         </div>
-
 
         {/* ================= BOTTOM CONTENT ================= */}
         <div className="absolute bottom-0 left-0 z-10 w-full">
@@ -248,7 +177,6 @@ const Start = () => {
 
             </div>
 
-
             {/* Heading */}
             <h2
               className="
@@ -267,7 +195,6 @@ const Start = () => {
               </span>
             </h2>
 
-
             {/* Description */}
             <p
               className="
@@ -282,7 +209,6 @@ const Start = () => {
               Your journey, your destination. Book a ride, get picked up,
               and travel comfortably with Saarthi.
             </p>
-
 
             {/* Continue Button */}
             <Link
@@ -321,7 +247,6 @@ const Start = () => {
               </span>
 
             </Link>
-
 
             {/* Terms */}
             <p

@@ -23,6 +23,12 @@ const BASE_URL =
 
 const LOCATION_HEARTBEAT_MS = 15000
 
+// false -> after "Accept" the captain sees the live map first and opens the
+//          OTP popup with the "Reached pickup" button.
+// true  -> the OTP popup opens right after "Accept" (old behaviour), the live
+//          map is visible behind it and after closing it.
+const OPEN_OTP_AFTER_CONFIRM = false
+
 const authHeaders = () => ({
     Authorization: `Bearer ${localStorage.getItem('token')}`,
     'Content-Type': 'application/json'
@@ -46,6 +52,9 @@ const CaptainHome = () => {
 
     const [ride, setRide] = useState(null)
 
+    // live tracking: opens after this captain confirmed a ride
+    const [showLiveTracking, setShowLiveTracking] = useState(false)
+
     const [otp, setOtp] = useState('')
     const [verifyingOtp, setVerifyingOtp] = useState(false)
 
@@ -63,12 +72,15 @@ const CaptainHome = () => {
     const heartbeatRef = useRef(null)
     const lastPositionRef = useRef(null)
 
-    // lets the socket handler read the latest value without re-subscribing
+    // lets the socket handler read the latest value without re-subscribing.
+    // true while the captain is entering the OTP OR is already tracking an
+    // accepted ride -> a new "new-ride" must not replace the current ride.
     const confirmOpenRef = useRef(false)
 
     useEffect(() => {
-        confirmOpenRef.current = confirmRidePopupPanel
-    }, [confirmRidePopupPanel])
+        confirmOpenRef.current =
+            confirmRidePopupPanel || showLiveTracking
+    }, [confirmRidePopupPanel, showLiveTracking])
 
     /* ================= CAPTAIN STATUS ================= */
 
@@ -253,13 +265,15 @@ const CaptainHome = () => {
         }
     }
 
-    /* ================= AUTO LOCATION ================= */
+    /* ================= AUTO LOCATION =================
+        GPS keeps running while online OR while a ride is being tracked,
+        so the user keeps receiving the captain position during the ride. */
 
     useEffect(() => {
 
         if (!socket || !captain?._id) return
 
-        if (online) {
+        if (online || showLiveTracking) {
             startLocationTracking()
         } else {
             stopLocationTracking()
@@ -270,7 +284,7 @@ const CaptainHome = () => {
         }
 
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [socket, captain?._id, online])
+    }, [socket, captain?._id, online, showLiveTracking])
 
     /* ================= NEW RIDE ================= */
 
@@ -287,7 +301,8 @@ const CaptainHome = () => {
 
             if (!incoming) return
 
-            // do not replace the ride while captain is already entering OTP
+            // do not replace the ride while captain is entering OTP
+            // or already tracking an accepted ride
             if (confirmOpenRef.current) return
 
             setRide(incoming)
@@ -350,7 +365,16 @@ const CaptainHome = () => {
                 }))
 
                 setRidePopupPanel(false)
-                setConfirmRidePopupPanel(true)
+
+                // open the live map (route captain -> pickup)
+                setShowLiveTracking(true)
+                setExpanded(false)
+
+                setConfirmRidePopupPanel(OPEN_OTP_AFTER_CONFIRM)
+
+                // send the current position right away, so the user does not
+                // have to wait for the next GPS update / heartbeat
+                sendLocation()
             }
 
         } catch (error) {
@@ -413,6 +437,7 @@ const CaptainHome = () => {
 
                 setConfirmRidePopupPanel(false)
                 setRidePopupPanel(false)
+                setShowLiveTracking(false)
                 setOtp('')
 
                 sessionStorage.setItem('activeRide', JSON.stringify(response.data))
@@ -457,13 +482,30 @@ const CaptainHome = () => {
             ? 'visible translate-y-0'
             : 'invisible pointer-events-none translate-y-full'
 
+    const passengerName =
+        ride?.user?.fullname?.firstname || 'Passenger'
+
     return (
 
     <div className="relative h-[100dvh] w-full overflow-hidden bg-gray-100">
 
-        {/* ================= LIVE MAP BACKGROUND ================= */}
+        {/* ================= LIVE MAP BACKGROUND =================
+            normal: own position
+            after confirm: route captain -> pickup + distance + ETA */}
         <div className="absolute inset-0 z-0">
-            <LiveTracking />
+            <LiveTracking
+                role="captain"
+                tracking={showLiveTracking && Boolean(ride)}
+                pickupLocation={
+                    ride?.pickupCoordinates
+                        ? [
+                            ride.pickupCoordinates.ltd,
+                            ride.pickupCoordinates.lng
+                        ]
+                        : null
+                }
+                pickupAddress={ride?.pickup}
+            />
         </div>
 
 
@@ -589,6 +631,49 @@ const CaptainHome = () => {
                             Captain dashboard
                         </h2>
                     </div>
+
+
+                    {/* ACTIVE RIDE (only after the captain accepted a ride) */}
+                    {showLiveTracking && ride && (
+                        <div className="mb-3 rounded-xl bg-[#F15A24]/10 p-4 ring-1 ring-[#F15A24]/30">
+
+                            <div className="flex items-start justify-between gap-3">
+
+                                <div className="min-w-0">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-[#F15A24]">
+                                        Ride accepted
+                                    </p>
+                                    <h3 className="truncate font-semibold text-[#12334A]">
+                                        {passengerName}
+                                    </h3>
+                                    <p className="mt-0.5 line-clamp-2 text-xs text-gray-600">
+                                        {ride.pickup}
+                                    </p>
+                                </div>
+
+                                {/* hides the live map / route (does not cancel the ride) */}
+                                <button
+                                    type="button"
+                                    onClick={() => setShowLiveTracking(false)}
+                                    aria-label="Hide live tracking"
+                                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-[#12334A] transition-colors hover:bg-[#F15A24] hover:text-white"
+                                >
+                                    <i className="text-lg ri-close-line" />
+                                </button>
+
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={() => setConfirmRidePopupPanel(true)}
+                                className="mt-3 w-full rounded-xl bg-[#12334A] py-3 font-semibold text-white shadow-md shadow-[#12334A]/15 transition-all duration-300 hover:bg-[#F15A24] active:scale-[0.98]"
+                            >
+                                Reached pickup · Enter OTP
+                            </button>
+
+                        </div>
+                    )}
+
 
                     {/* rows: stacked on mobile, 2 columns on tablet, 3 on laptop */}
                     <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">

@@ -24,6 +24,9 @@ const BASE_URL =
     import.meta.env.VITE_API_URL ||
     'http://localhost:3000'
 
+// how long we search for a driver before showing "No drivers available"
+const DRIVER_SEARCH_TIMEOUT = 30000
+
 const authHeaders = () => ({
     Authorization: `Bearer ${localStorage.getItem('token')}`
 })
@@ -32,6 +35,24 @@ const authHeaders = () => ({
 // class. Tailwind v4 uses the CSS `translate` property, GSAP uses `transform`,
 // so the class keeps the sheet hidden even after GSAP animates y to 0.
 const hiddenSheetStyle = { transform: 'translateY(100%)' }
+
+// Number(null) is 0 (would become 0,0 on the map) -> reject null/undefined/''
+const toCoords = (lat, lng) => {
+
+    if (
+        lat === null || lat === undefined || lat === '' ||
+        lng === null || lng === undefined || lng === ''
+    ) {
+        return null
+    }
+
+    const a = Number(lat)
+    const b = Number(lng)
+
+    return Number.isFinite(a) && Number.isFinite(b)
+        ? [a, b]
+        : null
+}
 
 const Home = () => {
 
@@ -48,6 +69,8 @@ const Home = () => {
     const [panelOpen, setPanelOpen] = useState(false)
     const [activeField, setActiveField] = useState(null)
 
+    const [locationPanelExpanded, setLocationPanelExpanded] = useState(false)
+
     const [suggestions, setSuggestions] = useState({
         pickup: [],
         destination: []
@@ -61,6 +84,15 @@ const Home = () => {
     const [ride, setRide] = useState(null)
     const [locating, setLocating] = useState(false)
     const [creatingRide, setCreatingRide] = useState(false)
+
+    // true when nobody accepted the ride within DRIVER_SEARCH_TIMEOUT
+    const [noDriverFound, setNoDriverFound] = useState(false)
+
+    // live tracking: opens after the captain accepted the ride
+    const [showLiveTracking, setShowLiveTracking] = useState(false)
+
+    // [lat, lng] of the captain, updated through "captain-location-update"
+    const [captainLocation, setCaptainLocation] = useState(null)
 
     // search | vehicle | confirm | looking | waiting
     const [activePanel, setActivePanel] = useState('search')
@@ -136,7 +168,20 @@ const Home = () => {
 
             console.log('RIDE ACCEPTED:', data)
 
-            setRide(data?.ride || data)
+            const acceptedRide = data?.ride || data
+
+            if (!acceptedRide || typeof acceptedRide !== 'object') {
+                console.error('Invalid ride-accepted payload:', data)
+                return
+            }
+
+            setRide(acceptedRide)
+
+            // map switches to tracking mode, the captain position arrives
+            // through "captain-location-update"
+            setCaptainLocation(null)
+            setShowLiveTracking(true)
+
             setActivePanel('waiting')
         }
 
@@ -144,6 +189,78 @@ const Home = () => {
 
         return () => {
             socket.off('ride-accepted', handleRideAccepted)
+        }
+
+    }, [socket])
+
+    // ================= NO DRIVER AVAILABLE =================
+
+    // Timeout: starts when the "looking" panel opens. If no captain accepts
+    // in time, show "No drivers available". When the ride is accepted the
+    // panel changes to 'waiting', the cleanup runs and the timer is cancelled.
+    useEffect(() => {
+
+        setNoDriverFound(false)
+
+        if (activePanel !== 'looking') return
+
+        const timer = setTimeout(() => {
+            setNoDriverFound(true)
+        }, DRIVER_SEARCH_TIMEOUT)
+
+        return () => clearTimeout(timer)
+
+    }, [activePanel])
+
+    // Optional: if the backend emits "no-captains-available" (nearby captain
+    // list was empty) show the message immediately. Harmless if never emitted.
+    useEffect(() => {
+
+        if (!socket) return
+
+        const handleNoCaptains = () => {
+            setNoDriverFound(true)
+        }
+
+        socket.on('no-captains-available', handleNoCaptains)
+
+        return () => {
+            socket.off('no-captains-available', handleNoCaptains)
+        }
+
+    }, [socket])
+
+    // ================= CAPTAIN LIVE LOCATION =================
+
+    useEffect(() => {
+
+        if (!socket) return
+
+        const handleCaptainLocation = data => {
+
+            // payload: { ltd, lng }  (also accepts { location: { ltd, lng } })
+            const point = toCoords(
+                data?.ltd ?? data?.location?.ltd,
+                data?.lng ?? data?.location?.lng
+            )
+
+            if (!point) {
+                console.error('Invalid captain location:', data)
+                return
+            }
+
+            // same position -> keep old state, no re-render
+            setCaptainLocation(prev =>
+                prev && prev[0] === point[0] && prev[1] === point[1]
+                    ? prev
+                    : point
+            )
+        }
+
+        socket.on('captain-location-update', handleCaptainLocation)
+
+        return () => {
+            socket.off('captain-location-update', handleCaptainLocation)
         }
 
     }, [socket])
@@ -375,8 +492,8 @@ const Home = () => {
 
         setSuggestionsFor('destination', [])
 
-        setPanelOpen(false)
-        setActiveField(null)
+        setActiveField('destination')
+        setPanelOpen(true)
     }
 
     // ================= SEARCH ANIMATION =================
@@ -503,6 +620,11 @@ const Home = () => {
 
         setCreatingRide(true)
 
+        // a new ride starts: forget tracking data of any previous ride
+        setShowLiveTracking(false)
+        setCaptainLocation(null)
+        setNoDriverFound(false)
+
         try {
 
             await createRide()
@@ -536,8 +658,10 @@ const Home = () => {
     const inputClass =
         'bg-[#eee] px-12 py-2 text-lg rounded-lg w-full'
 
-
-    
+    // dim backdrop is not used while tracking, so the map stays clear and usable
+    const showBackdrop =
+        activePanel !== 'search' &&
+        !(showLiveTracking && activePanel === 'waiting')
 
     // ================= UI =================
 
@@ -583,14 +707,26 @@ const Home = () => {
     </button>
 
 
-    {/* MAP */}
+
+
+    {/* MAP (switches to live tracking after the captain accepts) */}
 
     <div className="h-screen w-screen">
-        <LiveTracking />
+        <LiveTracking
+            role="user"
+            tracking={showLiveTracking}
+            captainLocation={showLiveTracking ? captainLocation : null}
+            pickupLocation={toCoords(
+                ride?.pickupCoordinates?.ltd,
+                ride?.pickupCoordinates?.lng
+            )}
+            pickupAddress={ride?.pickup || pickup}
+        />
     </div>
 
 
     {/* SEARCH */}
+    
 
     <div
         className={`${
@@ -608,7 +744,7 @@ const Home = () => {
                 rounded-t-[28px]
                 shadow-[0_-8px_30px_rgba(18,51,74,0.08)]
             "
-        >
+        >          
 
             {/* Close */}
 
@@ -809,9 +945,9 @@ const Home = () => {
 
     <div
         className={`fixed inset-0 z-[5] bg-[#12334A] transition-opacity ${
-            activePanel === 'search'
-                ? 'opacity-0 pointer-events-none'
-                : 'opacity-30'
+            showBackdrop
+                ? 'opacity-30'
+                : 'opacity-0 pointer-events-none'
         }`}
     />
 
@@ -865,7 +1001,9 @@ const Home = () => {
             destination={destination}
             fare={fare}
             vehicleType={vehicleType}
+            noDriverFound={noDriverFound}
             setVehicleFound={setVehicleFound}
+            onRetry={() => setConfirmRidePanel(true)}
         />
     </div>
 

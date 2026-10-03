@@ -10,6 +10,17 @@ let io;
 // stops being relayed even if the captain's socket stays connected
 const LIVE_RIDE_RECHECK_MS = 30000;
 
+// Accepted-ride tracking (ride accepted -> captain heading to pickup).
+// captainId -> { rideId, userId, checkedAt }
+// Filled by trackCaptainRide() when the captain confirms a ride, so the
+// location relay needs NO database query per GPS update.
+const trackedRides = new Map();
+
+// How often the tracked ride is re-verified in the DB (still "accepted"?),
+// and how often a captain WITHOUT an entry may trigger a DB lookup
+// (only needed to recover after a server restart, when the Map is empty).
+const TRACK_RECHECK_MS = 30000;
+
 // Map (not a plain object) so inputs like "constructor" can't match
 const MODELS = new Map([
     ['user', userModel],
@@ -42,6 +53,96 @@ function isSocketConnected(socketId) {
     return typeof sockets.get === 'function'
         ? Boolean(sockets.get(socketId)) // socket.io v3+
         : Boolean(sockets[socketId]);    // socket.io v2
+}
+
+
+// =========================
+// ACCEPTED RIDE: CAPTAIN LOCATION -> PASSENGER
+// =========================
+
+// Called from ride.controller confirmRide right after the ride is accepted.
+// From now on every "update-location-captain" of this captain is also sent
+// to this ride's passenger as "captain-location-update".
+function trackCaptainRide({ captainId, rideId, userId }) {
+
+    if (!captainId || !rideId || !userId) return;
+
+    trackedRides.set(String(captainId), {
+        rideId: String(rideId),
+        userId: String(userId),
+        checkedAt: Date.now()
+    });
+}
+
+// Sends { rideId, ltd, lng } to the passenger's personal room "user:<id>".
+// Never throws: a relay problem must not break saving the location.
+async function relayCaptainLocation(socket, ltd, lng) {
+
+    try {
+
+        const captainId = socket.data.userId;
+
+        let tracked = trackedRides.get(captainId);
+
+        // entry is old -> make sure the ride is still "accepted" and is
+        // still this captain's. Otherwise stop relaying.
+        if (tracked && Date.now() - tracked.checkedAt > TRACK_RECHECK_MS) {
+
+            const ride = await rideModel
+                .findOne({
+                    _id: tracked.rideId,
+                    captain: captainId,
+                    status: 'accepted'
+                })
+                .select('user');
+
+            if (!ride) {
+                trackedRides.delete(captainId);
+                tracked = null;
+            } else {
+                tracked.userId = String(ride.user);
+                tracked.checkedAt = Date.now();
+            }
+        }
+
+        // no entry (idle captain, or server was restarted): look in the DB,
+        // but at most once per TRACK_RECHECK_MS for this socket
+        if (!tracked) {
+
+            const now = Date.now();
+
+            if (now - (socket.data.lastTrackLookup || 0) < TRACK_RECHECK_MS) {
+                return;
+            }
+
+            socket.data.lastTrackLookup = now;
+
+            const ride = await rideModel
+                .findOne({ captain: captainId, status: 'accepted' })
+                .sort({ _id: -1 })
+                .select('user');
+
+            if (!ride) return;
+
+            tracked = {
+                rideId: String(ride._id),
+                userId: String(ride.user),
+                checkedAt: now
+            };
+
+            trackedRides.set(captainId, tracked);
+        }
+
+        io.to(`user:${tracked.userId}`).emit('captain-location-update', {
+            rideId: tracked.rideId,
+            ltd,
+            lng
+        });
+
+    } catch (error) {
+
+        console.error('Captain location relay error:', error);
+    }
 }
 
 
@@ -141,7 +242,8 @@ function initializeSocket(server) {
 
 
         // =========================
-        // CAPTAIN LOCATION (saved in DB)
+        // CAPTAIN LOCATION (saved in DB + sent to the passenger
+        // when the captain has an accepted ride)
         // =========================
 
         socket.on('update-location-captain', async (data) => {
@@ -164,10 +266,15 @@ function initializeSocket(server) {
                     return emitError(socket, 'Invalid location data');
                 }
 
-                await captainModel.updateOne(
-                    { _id: socket.data.userId },
-                    { $set: { 'location.ltd': ltd, 'location.lng': lng } }
-                );
+                // both run at the same time, so a slow DB write does not
+                // delay the live update (relayCaptainLocation never throws)
+                await Promise.all([
+                    captainModel.updateOne(
+                        { _id: socket.data.userId },
+                        { $set: { 'location.ltd': ltd, 'location.lng': lng } }
+                    ),
+                    relayCaptainLocation(socket, ltd, lng)
+                ]);
 
             } catch (error) {
 
@@ -325,5 +432,6 @@ const sendMessageToSocketId = (socketId, messageObject) => {
 
 module.exports = {
     initializeSocket,
-    sendMessageToSocketId
+    sendMessageToSocketId,
+    trackCaptainRide
 };
