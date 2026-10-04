@@ -3,10 +3,29 @@ const { validationResult } = require('express-validator');
 const { sendMessageToSocketId, trackCaptainRide } = require('../socket');
 const mapService = require('../services/maps.service');
 
+const rideModel = require('../models/ride.model');
+const captainModel = require('../models/captain.model');
+
+// A completed ride is offered for rating only for this long
+const PENDING_RATING_WINDOW_MS = 30 * 60 * 1000;
+
 // Remove otp before sending a ride to a captain
 function withoutOtp(ride) {
     const obj = ride.toObject ? ride.toObject() : { ...ride };
     delete obj.otp;
+    return obj;
+}
+
+// Ride payload for the user's rating popup: no otp, and only the
+// captain fields the popup needs (no email / socketId / location)
+function ratingPayload(ride) {
+    const obj = withoutOtp(ride);
+
+    if (obj.captain && typeof obj.captain === 'object') {
+        const { _id, fullname, vehicle, rating, ratingCount } = obj.captain;
+        obj.captain = { _id, fullname, vehicle, rating, ratingCount };
+    }
+
     return obj;
 }
 
@@ -171,21 +190,131 @@ module.exports.endRide = async (req, res) => {
     }
 
     try {
+        // service already populates user + captain
         const ride = await rideService.endRide({
             rideId: req.body.rideId,
             captain: req.captain
         });
 
-        if (ride.user && ride.user.socketId) {
-            sendMessageToSocketId(ride.user.socketId, {
-                event: 'ride-ended',
-                data: withoutOtp(ride)
-            });
-        }
+        const delivered =
+            ride.user?.socketId
+                ? sendMessageToSocketId(ride.user.socketId, {
+                    event: 'ride-ended',
+                    data: ratingPayload(ride)
+                })
+                : false;
+
+        // If this is false the user's popup comes from GET /rides/pending-rating
+        console.log('RIDE ENDED:', ride._id, '| ride-ended delivered:', delivered);
 
         return res.status(200).json(withoutOtp(ride));
     } catch (err) {
         console.error('END RIDE ERROR:', err);
+        return res.status(500).json({ message: err.message });
+    }
+};
+
+// ================= PENDING RATING =================
+// Latest completed, not-yet-rated ride of this user (backup when the
+// "ride-ended" socket event was missed).
+module.exports.getPendingRating = async (req, res) => {
+    try {
+        const ride = await rideModel
+            .findOne({
+                user: req.user._id,
+                status: 'completed',
+                'rating.value': { $exists: false },
+                updatedAt: { $gte: new Date(Date.now() - PENDING_RATING_WINDOW_MS) }
+            })
+            .sort({ updatedAt: -1 })
+            .populate('captain', 'fullname vehicle rating ratingCount');
+
+        return res.status(200).json({ ride: ride ? ratingPayload(ride) : null });
+    } catch (err) {
+        console.error('PENDING RATING ERROR:', err);
+        return res.status(500).json({ message: err.message });
+    }
+};
+
+// ================= RATE RIDE =================
+module.exports.rateRide = async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return res.status(400).json({
+            message: errors.array()[0].msg,
+            errors: errors.array()
+        });
+    }
+
+    const { rideId, comment } = req.body;
+    const value = Number(req.body.value);
+
+    try {
+        // Atomic: only this ride's user, only a completed ride, only once
+        const ride = await rideModel.findOneAndUpdate(
+            {
+                _id: rideId,
+                user: req.user._id,
+                status: 'completed',
+                'rating.value': { $exists: false }
+            },
+            {
+                $set: {
+                    'rating.value': value,
+                    'rating.comment': (comment || '').trim(),
+                    'rating.ratedAt': new Date()
+                }
+            },
+            { returnDocument: 'after', runValidators: true }
+        );
+
+        if (!ride) {
+            return res.status(400).json({
+                message: 'Cannot rate this ride (not completed, not yours, or already rated)'
+            });
+        }
+
+        if (!ride.captain) {
+            return res.status(200).json({ message: 'Thanks for rating' });
+        }
+
+        // Captain running average: (avg * count + value) / (count + 1)
+        await captainModel.findByIdAndUpdate(
+            ride.captain,
+            [
+                {
+                    $set: {
+                        rating: {
+                            $round: [
+                                {
+                                    $divide: [
+                                        {
+                                            $add: [
+                                                {
+                                                    $multiply: [
+                                                        { $ifNull: ['$rating', 0] },
+                                                        { $ifNull: ['$ratingCount', 0] }
+                                                    ]
+                                                },
+                                                value
+                                            ]
+                                        },
+                                        { $add: [{ $ifNull: ['$ratingCount', 0] }, 1] }
+                                    ]
+                                },
+                                2
+                            ]
+                        },
+                        ratingCount: { $add: [{ $ifNull: ['$ratingCount', 0] }, 1] }
+                    }
+                }
+            ],
+            { updatePipeline: true }
+        );
+
+        return res.status(200).json({ message: 'Thanks for rating' });
+    } catch (err) {
+        console.error('RATE RIDE ERROR:', err);
         return res.status(500).json({ message: err.message });
     }
 };

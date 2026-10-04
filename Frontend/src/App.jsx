@@ -20,6 +20,8 @@ import CaptainLogout from './pages/CaptainLogout'
 import Riding from './pages/Riding'
 import CaptainRiding from './pages/CaptainRiding'
 
+import RideEndRating from './components/RideEndRating'
+
 import 'remixicon/fonts/remixicon.css'
 import 'leaflet/dist/leaflet.css'
 
@@ -67,7 +69,11 @@ const App = () => {
 
         <Route
           path="/riding"
-          element={<Riding />}
+          element={
+            <UserProtectWrapper>
+              <Riding />
+            </UserProtectWrapper>
+          }
         />
 
         {/* Captain Routes */}
@@ -105,6 +111,9 @@ const App = () => {
         />
 
       </Routes>
+
+      {/* Global: user ko rating popup kisi bhi page par dikhega */}
+      <RideEndRating />
 
     </div>
   )

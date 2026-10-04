@@ -2,26 +2,20 @@ const socketIo = require('socket.io');
 const mongoose = require('mongoose');
 const userModel = require('./models/user.model');
 const captainModel = require('./models/captain.model');
-const rideModel = require('./models/ride.model'); // adjust path if different
+const rideModel = require('./models/ride.model');
 
 let io;
 
-// Re-check the ride in DB at most this often, so a finished ride
-// stops being relayed even if the captain's socket stays connected
+// Re-check the ride in DB at most this often
 const LIVE_RIDE_RECHECK_MS = 30000;
 
-// Accepted-ride tracking (ride accepted -> captain heading to pickup).
-// captainId -> { rideId, userId, checkedAt }
-// Filled by trackCaptainRide() when the captain confirms a ride, so the
-// location relay needs NO database query per GPS update.
+// Accepted-ride tracking
 const trackedRides = new Map();
 
-// How often the tracked ride is re-verified in the DB (still "accepted"?),
-// and how often a captain WITHOUT an entry may trigger a DB lookup
-// (only needed to recover after a server restart, when the Map is empty).
+// Track re-check interval
 const TRACK_RECHECK_MS = 30000;
 
-// Map (not a plain object) so inputs like "constructor" can't match
+// Models
 const MODELS = new Map([
     ['user', userModel],
     ['captain', captainModel]
@@ -31,10 +25,17 @@ function emitError(socket, message) {
     socket.emit('error', { message });
 }
 
-// Accepts numbers or numeric strings; rejects null, '', booleans, arrays
+// Accept numbers or numeric strings
 function toCoord(value) {
     if (typeof value === 'number') return value;
-    if (typeof value === 'string' && value.trim() !== '') return Number(value);
+
+    if (
+        typeof value === 'string' &&
+        value.trim() !== ''
+    ) {
+        return Number(value);
+    }
+
     return NaN;
 }
 
@@ -42,8 +43,10 @@ function isValidLatLng(ltd, lng) {
     return (
         Number.isFinite(ltd) &&
         Number.isFinite(lng) &&
-        ltd >= -90 && ltd <= 90 &&
-        lng >= -180 && lng <= 180
+        ltd >= -90 &&
+        ltd <= 90 &&
+        lng >= -180 &&
+        lng <= 180
     );
 }
 
@@ -51,18 +54,16 @@ function isSocketConnected(socketId) {
     const sockets = io.sockets.sockets;
 
     return typeof sockets.get === 'function'
-        ? Boolean(sockets.get(socketId)) // socket.io v3+
-        : Boolean(sockets[socketId]);    // socket.io v2
+        ? Boolean(sockets.get(socketId))
+        : Boolean(sockets[socketId]);
 }
 
 
-// =========================
-// ACCEPTED RIDE: CAPTAIN LOCATION -> PASSENGER
-// =========================
+// ======================================================
+// ACCEPTED RIDE:
+// CAPTAIN LOCATION -> PASSENGER
+// ======================================================
 
-// Called from ride.controller confirmRide right after the ride is accepted.
-// From now on every "update-location-captain" of this captain is also sent
-// to this ride's passenger as "captain-location-update".
 function trackCaptainRide({ captainId, rideId, userId }) {
 
     if (!captainId || !rideId || !userId) return;
@@ -74,8 +75,11 @@ function trackCaptainRide({ captainId, rideId, userId }) {
     });
 }
 
-// Sends { rideId, ltd, lng } to the passenger's personal room "user:<id>".
-// Never throws: a relay problem must not break saving the location.
+
+// ======================================================
+// RELAY CAPTAIN LOCATION
+// ======================================================
+
 async function relayCaptainLocation(socket, ltd, lng) {
 
     try {
@@ -84,9 +88,11 @@ async function relayCaptainLocation(socket, ltd, lng) {
 
         let tracked = trackedRides.get(captainId);
 
-        // entry is old -> make sure the ride is still "accepted" and is
-        // still this captain's. Otherwise stop relaying.
-        if (tracked && Date.now() - tracked.checkedAt > TRACK_RECHECK_MS) {
+        // Re-check old tracked ride
+        if (
+            tracked &&
+            Date.now() - tracked.checkedAt > TRACK_RECHECK_MS
+        ) {
 
             const ride = await rideModel
                 .findOne({
@@ -97,28 +103,36 @@ async function relayCaptainLocation(socket, ltd, lng) {
                 .select('user');
 
             if (!ride) {
+
                 trackedRides.delete(captainId);
                 tracked = null;
+
             } else {
+
                 tracked.userId = String(ride.user);
                 tracked.checkedAt = Date.now();
             }
         }
 
-        // no entry (idle captain, or server was restarted): look in the DB,
-        // but at most once per TRACK_RECHECK_MS for this socket
+        // No tracked ride
         if (!tracked) {
 
             const now = Date.now();
 
-            if (now - (socket.data.lastTrackLookup || 0) < TRACK_RECHECK_MS) {
+            if (
+                now - (socket.data.lastTrackLookup || 0)
+                < TRACK_RECHECK_MS
+            ) {
                 return;
             }
 
             socket.data.lastTrackLookup = now;
 
             const ride = await rideModel
-                .findOne({ captain: captainId, status: 'accepted' })
+                .findOne({
+                    captain: captainId,
+                    status: 'accepted'
+                })
                 .sort({ _id: -1 })
                 .select('user');
 
@@ -133,302 +147,592 @@ async function relayCaptainLocation(socket, ltd, lng) {
             trackedRides.set(captainId, tracked);
         }
 
-        io.to(`user:${tracked.userId}`).emit('captain-location-update', {
-            rideId: tracked.rideId,
-            ltd,
-            lng
-        });
+        // Send captain location to passenger
+        io.to(`user:${tracked.userId}`).emit(
+            'captain-location-update',
+            {
+                rideId: tracked.rideId,
+                ltd,
+                lng
+            }
+        );
 
     } catch (error) {
 
-        console.error('Captain location relay error:', error);
+        console.error(
+            'Captain location relay error:',
+            error
+        );
     }
 }
 
 
+// ======================================================
+// INITIALIZE SOCKET
+// ======================================================
+
 function initializeSocket(server) {
 
-    // calling this twice used to create a second Socket.IO server
+    // Prevent duplicate Socket.IO initialization
     if (io) return io;
 
     io = socketIo(server, {
+
         cors: {
-            origin: '*', // TODO: restrict to your frontend URL in production
+            origin: '*',
             methods: ['GET', 'POST']
-        }
+        },
+
+        // ==================================================
+        // IMPORTANT:
+        // Detect dead / closed browser connections
+        // ==================================================
+
+        pingInterval: 5000,
+        pingTimeout: 10000
     });
+
+
+    // ======================================================
+    // SOCKET CONNECTION
+    // ======================================================
 
     io.on('connection', (socket) => {
 
-        console.log(`Client connected: ${socket.id}`);
+        console.log(
+            `Client connected: ${socket.id}`
+        );
 
-        // Identity of this socket, set only after a successful join
+        // Identity is assigned after successful join
         socket.data = {};
 
 
-        // =========================
+        // ==================================================
         // USER / CAPTAIN JOIN
-        // =========================
+        // ==================================================
 
         socket.on('join', async (data, ack) => {
 
             const reply = (payload) => {
-                if (typeof ack === 'function') ack(payload);
+
+                if (typeof ack === 'function') {
+                    ack(payload);
+                }
             };
 
             const fail = (message) => {
-                console.log('Join failed:', message);
+
+                console.log(
+                    'Join failed:',
+                    message
+                );
+
                 emitError(socket, message);
-                reply({ ok: false, message });
+
+                reply({
+                    ok: false,
+                    message
+                });
             };
 
             try {
 
-                const { userId, userType } = data || {};
+                const {
+                    userId,
+                    userType
+                } = data || {};
 
                 if (!userId || !userType) {
-                    return fail('userId and userType are required');
+                    return fail(
+                        'userId and userType are required'
+                    );
                 }
 
                 const Model = MODELS.get(userType);
 
                 if (!Model) {
-                    return fail('Invalid userType');
+                    return fail(
+                        'Invalid userType'
+                    );
                 }
 
                 if (!mongoose.isValidObjectId(userId)) {
-                    return fail('Invalid userId');
+                    return fail(
+                        'Invalid userId'
+                    );
                 }
 
+                // Save socket ID
                 const updated = await Model.findByIdAndUpdate(
                     userId,
-                    { socketId: socket.id },
-                    { new: true, runValidators: true }
+                    {
+                        socketId: socket.id
+                    },
+                    {
+                        new: true,
+                        runValidators: true
+                    }
                 );
 
                 if (!updated) {
-                    return fail(`${userType} not found`);
+
+                    return fail(
+                        `${userType} not found`
+                    );
                 }
 
-                // socket disconnected while we were saving, so the
-                // disconnect handler had no identity to clean up. Do it here.
+                // Socket disconnected while DB update was running
                 if (socket.disconnected) {
+
                     await Model.updateOne(
-                        { _id: updated._id, socketId: socket.id },
-                        { $unset: { socketId: 1 } }
+                        {
+                            _id: updated._id,
+                            socketId: socket.id
+                        },
+                        {
+                            $unset: {
+                                socketId: 1
+                            }
+                        }
                     );
+
                     return;
                 }
 
-                socket.data.userId = String(updated._id);
-                socket.data.userType = userType;
+                // Save identity inside socket
+                socket.data.userId =
+                    String(updated._id);
 
-                // personal room: used to push live data (captain location)
-                // to a user. Rooms are cleared automatically on disconnect.
-                socket.join(`${userType}:${socket.data.userId}`);
+                socket.data.userType =
+                    userType;
 
-                console.log(`JOIN ok: ${userType} ${updated._id} -> ${socket.id}`);
+                // Personal room
+                socket.join(
+                    `${userType}:${socket.data.userId}`
+                );
 
-                reply({ ok: true });
+                console.log(
+                    `JOIN ok: ${userType} ${updated._id} -> ${socket.id}`
+                );
+
+                reply({
+                    ok: true
+                });
 
             } catch (error) {
 
-                console.error('Join socket error:', error);
+                console.error(
+                    'Join socket error:',
+                    error
+                );
 
-                emitError(socket, 'Join failed');
-                reply({ ok: false, message: 'Join failed' });
+                emitError(
+                    socket,
+                    'Join failed'
+                );
+
+                reply({
+                    ok: false,
+                    message: 'Join failed'
+                });
             }
         });
 
 
-        // =========================
-        // CAPTAIN LOCATION (saved in DB + sent to the passenger
-        // when the captain has an accepted ride)
-        // =========================
+        // ==================================================
+        // CAPTAIN LOCATION
+        // ==================================================
 
-        socket.on('update-location-captain', async (data) => {
+        socket.on(
+            'update-location-captain',
+            async (data) => {
 
-            try {
+                try {
 
-                // trust the identity set at join, not a userId sent by the
-                // client. Otherwise anyone can move any captain on the map.
-                if (
-                    socket.data.userType !== 'captain' ||
-                    !socket.data.userId
-                ) {
-                    return emitError(socket, 'Join as a captain first');
+                    // Only captain can update captain location
+                    if (
+                        socket.data.userType !== 'captain' ||
+                        !socket.data.userId
+                    ) {
+
+                        return emitError(
+                            socket,
+                            'Join as a captain first'
+                        );
+                    }
+
+                    const ltd =
+                        toCoord(
+                            data?.location?.ltd
+                        );
+
+                    const lng =
+                        toCoord(
+                            data?.location?.lng
+                        );
+
+                    if (
+                        !isValidLatLng(
+                            ltd,
+                            lng
+                        )
+                    ) {
+
+                        return emitError(
+                            socket,
+                            'Invalid location data'
+                        );
+                    }
+
+                    await Promise.all([
+
+                        // Save location
+                        captainModel.updateOne(
+                            {
+                                _id:
+                                    socket.data.userId
+                            },
+                            {
+                                $set: {
+                                    'location.ltd': ltd,
+                                    'location.lng': lng
+                                }
+                            }
+                        ),
+
+                        // Relay to passenger
+                        relayCaptainLocation(
+                            socket,
+                            ltd,
+                            lng
+                        )
+                    ]);
+
+                } catch (error) {
+
+                    console.error(
+                        'Captain location update error:',
+                        error
+                    );
                 }
-
-                const ltd = toCoord(data?.location?.ltd);
-                const lng = toCoord(data?.location?.lng);
-
-                if (!isValidLatLng(ltd, lng)) {
-                    return emitError(socket, 'Invalid location data');
-                }
-
-                // both run at the same time, so a slow DB write does not
-                // delay the live update (relayCaptainLocation never throws)
-                await Promise.all([
-                    captainModel.updateOne(
-                        { _id: socket.data.userId },
-                        { $set: { 'location.ltd': ltd, 'location.lng': lng } }
-                    ),
-                    relayCaptainLocation(socket, ltd, lng)
-                ]);
-
-            } catch (error) {
-
-                console.error('Captain location update error:', error);
             }
-        });
+        );
 
 
-        // =========================
+        // ==================================================
         // CAPTAIN LIVE LOCATION -> PASSENGER
-        // =========================
+        // ==================================================
 
-        socket.on('captain-live-location', async (data) => {
+        socket.on(
+            'captain-live-location',
+            async (data) => {
 
-            try {
+                try {
 
-                if (
-                    socket.data.userType !== 'captain' ||
-                    !socket.data.userId
-                ) {
-                    return emitError(socket, 'Join as a captain first');
-                }
+                    if (
+                        socket.data.userType !== 'captain' ||
+                        !socket.data.userId
+                    ) {
 
-                const ltd = toCoord(data?.location?.ltd);
-                const lng = toCoord(data?.location?.lng);
+                        return emitError(
+                            socket,
+                            'Join as a captain first'
+                        );
+                    }
 
-                if (!isValidLatLng(ltd, lng)) {
-                    return emitError(socket, 'Invalid location data');
-                }
+                    const ltd =
+                        toCoord(
+                            data?.location?.ltd
+                        );
 
-                const rideId = data?.rideId;
+                    const lng =
+                        toCoord(
+                            data?.location?.lng
+                        );
 
-                if (!mongoose.isValidObjectId(rideId)) return;
+                    if (
+                        !isValidLatLng(
+                            ltd,
+                            lng
+                        )
+                    ) {
 
-                // Verify against the DB only when the ride changes or the
-                // cached check is old. The ride must belong to THIS captain,
-                // so a captain can't push locations to a random passenger.
-                const cached = socket.data.liveRide;
+                        return emitError(
+                            socket,
+                            'Invalid location data'
+                        );
+                    }
 
-                const needsCheck =
-                    !cached ||
-                    cached.rideId !== String(rideId) ||
-                    Date.now() - cached.checkedAt > LIVE_RIDE_RECHECK_MS;
+                    const rideId =
+                        data?.rideId;
 
-                if (needsCheck) {
-
-                    const ride = await rideModel
-                        .findOne({
-                            _id: rideId,
-                            captain: socket.data.userId,
-                            status: 'ongoing' // use your actual in-progress status
-                        })
-                        .select('user');
-
-                    if (!ride) {
-                        socket.data.liveRide = null;
+                    if (
+                        !mongoose.isValidObjectId(
+                            rideId
+                        )
+                    ) {
                         return;
                     }
 
-                    socket.data.liveRide = {
-                        rideId: String(ride._id),
-                        userId: String(ride.user),
-                        checkedAt: Date.now()
-                    };
+                    const cached =
+                        socket.data.liveRide;
+
+                    const needsCheck =
+                        !cached ||
+                        cached.rideId !== String(rideId) ||
+                        Date.now() -
+                        cached.checkedAt >
+                        LIVE_RIDE_RECHECK_MS;
+
+                    if (needsCheck) {
+
+                        const ride =
+                            await rideModel
+                                .findOne({
+                                    _id: rideId,
+                                    captain:
+                                        socket.data.userId,
+                                    status: 'ongoing'
+                                })
+                                .select('user');
+
+                        if (!ride) {
+
+                            socket.data.liveRide =
+                                null;
+
+                            return;
+                        }
+
+                        socket.data.liveRide = {
+
+                            rideId:
+                                String(ride._id),
+
+                            userId:
+                                String(ride.user),
+
+                            checkedAt:
+                                Date.now()
+                        };
+                    }
+
+                    io.to(
+                        `user:${socket.data.liveRide.userId}`
+                    ).emit(
+                        'captain-location',
+                        {
+                            rideId:
+                                socket.data.liveRide.rideId,
+
+                            lat: ltd,
+                            lng: lng
+                        }
+                    );
+
+                } catch (error) {
+
+                    console.error(
+                        'Live location relay error:',
+                        error
+                    );
+                }
+            }
+        );
+
+
+        // ==================================================
+        // DISCONNECT
+        // ==================================================
+
+        socket.on(
+            'disconnect',
+            async (reason) => {
+
+                console.log(
+                    `Client disconnected: ${socket.id}`
+                );
+
+                console.log(
+                    `Disconnect reason: ${reason}`
+                );
+
+                const {
+                    userId,
+                    userType
+                } = socket.data || {};
+
+                // Socket never joined
+                if (!userId || !userType) {
+                    return;
                 }
 
-                io.to(`user:${socket.data.liveRide.userId}`).emit(
-                    'captain-location',
-                    {
-                        rideId: socket.data.liveRide.rideId,
-                        lat: ltd,
-                        lng
+                try {
+
+                    const Model =
+                        MODELS.get(userType);
+
+                    if (!Model) {
+                        return;
                     }
-                );
 
-            } catch (error) {
 
-                console.error('Live location relay error:', error);
+                    // ==================================================
+                    // CAPTAIN DISCONNECTED
+                    // ==================================================
+
+                    if (userType === 'captain') {
+
+                        const result =
+                            await captainModel.updateOne(
+
+                                {
+                                    _id: userId,
+
+                                    // VERY IMPORTANT:
+                                    // Only update if this is still
+                                    // the captain's current socket.
+                                    socketId: socket.id
+                                },
+
+                                {
+                                    $set: {
+                                        status: 'inactive'
+                                    },
+
+                                    $unset: {
+                                        socketId: 1
+                                    }
+                                }
+                            );
+
+
+                        if (result.modifiedCount > 0) {
+
+                            console.log(
+                                `Captain ${userId} automatically set to INACTIVE`
+                            );
+
+                        } else {
+
+                            console.log(
+                                `Captain ${userId} already reconnected or socket changed`
+                            );
+                        }
+
+                        // Remove accepted ride tracking
+                        trackedRides.delete(
+                            String(userId)
+                        );
+
+                        return;
+                    }
+
+
+                    // ==================================================
+                    // NORMAL USER DISCONNECTED
+                    // ==================================================
+
+                    await Model.updateOne(
+
+                        {
+                            _id: userId,
+                            socketId: socket.id
+                        },
+
+                        {
+                            $unset: {
+                                socketId: 1
+                            }
+                        }
+                    );
+
+                } catch (error) {
+
+                    console.error(
+                        'Disconnect cleanup error:',
+                        error
+                    );
+                }
             }
-        });
-
-
-        // =========================
-        // DISCONNECT
-        // =========================
-
-        socket.on('disconnect', async () => {
-
-            console.log(`Client disconnected: ${socket.id}`);
-
-            const { userId, userType } = socket.data || {};
-
-            if (!userId) return;
-
-            try {
-
-                // one targeted query by _id. The socketId condition keeps it
-                // race-safe: if the user already reconnected, the new
-                // socketId is left alone.
-                await MODELS.get(userType).updateOne(
-                    { _id: userId, socketId: socket.id },
-                    { $unset: { socketId: 1 } }
-                );
-
-            } catch (error) {
-
-                console.error('Disconnect cleanup error:', error);
-            }
-        });
+        );
 
     });
 
-    console.log('Socket.IO initialized');
+    console.log(
+        'Socket.IO initialized'
+    );
 
     return io;
 }
 
 
-// =========================
+// ======================================================
 // SEND MESSAGE
-// =========================
+// ======================================================
 
-// Returns true if the message was sent, false if the target isn't reachable
-const sendMessageToSocketId = (socketId, messageObject) => {
+const sendMessageToSocketId = (
+    socketId,
+    messageObject
+) => {
 
     if (!io) {
-        console.log('Socket.io not initialized');
+
+        console.log(
+            'Socket.io not initialized'
+        );
+
         return false;
     }
 
     if (!socketId) {
-        console.log('Socket ID missing');
+
+        console.log(
+            'Socket ID missing'
+        );
+
         return false;
     }
 
-    if (!messageObject || !messageObject.event) {
-        console.log('Message event missing');
+    if (
+        !messageObject ||
+        !messageObject.event
+    ) {
+
+        console.log(
+            'Message event missing'
+        );
+
         return false;
     }
 
-    // stale socketIds (offline captains) used to be "sent" silently
     if (!isSocketConnected(socketId)) {
-        console.log(`Socket not connected: ${socketId} (${messageObject.event})`);
+
+        console.log(
+            `Socket not connected: ${socketId} (${messageObject.event})`
+        );
+
         return false;
     }
 
-    // does not log messageObject.data. Ride payloads contain the OTP.
-    console.log(`Sending "${messageObject.event}" to ${socketId}`);
+    // Do not log messageObject.data because
+    // ride payload may contain OTP
+    console.log(
+        `Sending "${messageObject.event}" to ${socketId}`
+    );
 
-    io.to(socketId).emit(messageObject.event, messageObject.data);
+    io.to(socketId).emit(
+        messageObject.event,
+        messageObject.data
+    );
 
     return true;
 };
 
+
+// ======================================================
+// EXPORT
+// ======================================================
 
 module.exports = {
     initializeSocket,

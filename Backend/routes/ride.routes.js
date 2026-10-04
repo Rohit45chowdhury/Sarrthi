@@ -1,4 +1,3 @@
-
 const express = require('express');
 const router = express.Router();
 
@@ -115,6 +114,42 @@ router.post(
         .withMessage('Invalid ride id'),
 
     rideController.endRide
+);
+
+
+// ================= PENDING RATING (user) =================
+
+router.get(
+    '/pending-rating',
+
+    authMiddleware.authUser,
+
+    rideController.getPendingRating
+);
+
+
+// ================= RATE RIDE (user) =================
+
+router.post(
+    '/rate',
+
+    authMiddleware.authUser,
+
+    body('rideId')
+        .isMongoId()
+        .withMessage('Invalid ride id'),
+
+    body('value')
+        .isInt({ min: 1, max: 5 })
+        .withMessage('Rating must be 1-5'),
+
+    body('comment')
+        .optional({ nullable: true })
+        .isString()
+        .isLength({ max: 300 })
+        .withMessage('Comment is too long'),
+
+    rideController.rateRide
 );
 
 

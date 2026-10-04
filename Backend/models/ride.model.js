@@ -29,7 +29,14 @@ const rideSchema = new mongoose.Schema(
         orderId: { type: String },
         signature: { type: String },
 
-        otp: { type: String, select: false, required: true }
+        otp: { type: String, select: false, required: true },
+
+        // ===== RATING (user rates captain after the ride) =====
+        rating: {
+            value: { type: Number, min: 1, max: 5 },
+            comment: { type: String, maxlength: 300 },
+            ratedAt: { type: Date }
+        }
     },
     { timestamps: true }
 );
