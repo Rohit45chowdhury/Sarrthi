@@ -1,4 +1,6 @@
 const axios = require('axios');
+const crypto = require('crypto');
+const redis = require('../redis');
 
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
 const OSRM = 'https://router.project-osrm.org';
@@ -20,13 +22,39 @@ class GeoError extends Error {
     }
 }
 
-/* ================= GEOCODE CACHE + THROTTLE ================= */
+/* ================= REDIS CACHE ================= */
+
+const PREFIX = 'maps:v1:';          // bump v1 -> v2 to invalidate everything
+const GEO_TTL = 60 * 60 * 24 * 7;   // 7 days: addresses rarely move
+const SUGGEST_TTL = 60 * 10;        // 10 minutes
+const ROUTE_TTL = 60 * 30;          // 30 minutes (OSRM has no live traffic)
+
+const hash = (s) => crypto.createHash('sha1').update(s).digest('hex');
+
+// Redis is an optimisation, never a dependency: on any error act like a miss
+async function cacheGet(key) {
+    try {
+        const v = await redis.get(PREFIX + key);
+        return v ? JSON.parse(v) : null;
+    } catch {
+        return null;
+    }
+}
+
+async function cacheSet(key, value, ttl) {
+    try {
+        await redis.set(PREFIX + key, JSON.stringify(value), 'EX', ttl);
+    } catch {
+        /* ignore */
+    }
+}
+
+/* ================= NOMINATIM THROTTLE ================= */
 
 // Nominatim's public server allows ~1 request/second
-const GEO_CACHE_TTL = 60 * 60 * 1000; // 1 hour
-const GEO_CACHE_MAX = 500;
+// NOTE: this slot is per-process. If you run more than one instance,
+// move it into Redis so all instances share the same limit.
 const MAX_QUEUE_WAIT = 8000; // refuse work if the queue is longer than this
-const geoCache = new Map();
 
 let nextSlot = 0;
 
@@ -47,27 +75,6 @@ async function throttleNominatim() {
     }
 }
 
-function cacheGet(key) {
-    const hit = geoCache.get(key);
-
-    if (!hit) return null;
-
-    if (Date.now() - hit.at > GEO_CACHE_TTL) {
-        geoCache.delete(key);
-        return null;
-    }
-
-    return { ...hit.value }; // copy so callers can't mutate the cache
-}
-
-function cacheSet(key, value) {
-    if (geoCache.size >= GEO_CACHE_MAX) {
-        geoCache.delete(geoCache.keys().next().value); // drop oldest
-    }
-
-    geoCache.set(key, { value, at: Date.now() });
-}
-
 /* ================= HELPERS ================= */
 
 function buildQueries(original) {
@@ -86,6 +93,8 @@ function buildQueries(original) {
     return [...new Set(queries.filter(Boolean))];
 }
 
+const geoKey = (text) => `geo:${hash(text.trim().toLowerCase())}`;
+
 /* ================= ADDRESS -> COORDINATES ================= */
 
 async function getAddressCoordinates(address) {
@@ -94,9 +103,9 @@ async function getAddressCoordinates(address) {
     }
 
     const original = address.trim();
-    const cacheKey = original.toLowerCase();
+    const cacheKey = geoKey(original);
 
-    const cached = cacheGet(cacheKey);
+    const cached = await cacheGet(cacheKey);
 
     if (cached) return cached;
 
@@ -125,9 +134,9 @@ async function getAddressCoordinates(address) {
                     // (`lat` and `ltd`) and neither side breaks
                     const result = { lat, ltd: lat, lng };
 
-                    cacheSet(cacheKey, result);
+                    await cacheSet(cacheKey, result, GEO_TTL);
 
-                    return { ...result };
+                    return result;
                 }
             }
         } catch (error) {
@@ -161,6 +170,15 @@ module.exports.getDistanceTime = async (origin, destination) => {
         throw new GeoError('Origin and destination are required', 400);
     }
 
+    // Cached by the raw strings, so a hit skips the geocode lookups too
+    const routeKey = `route:${hash(
+        origin.trim().toLowerCase() + '|' + destination.trim().toLowerCase()
+    )}`;
+
+    const cachedRoute = await cacheGet(routeKey);
+
+    if (cachedRoute) return cachedRoute;
+
     // Sequential on purpose: keeps us under Nominatim's rate limit
     const start = await getAddressCoordinates(origin);
     const end = await getAddressCoordinates(destination);
@@ -188,7 +206,7 @@ module.exports.getDistanceTime = async (origin, destination) => {
         const distanceKm = route.distance / 1000;
         const durationMin = route.duration / 60;
 
-        return {
+        const result = {
             distance: {
                 text: `${distanceKm.toFixed(2)} km`,
                 value: route.distance // meters
@@ -199,6 +217,10 @@ module.exports.getDistanceTime = async (origin, destination) => {
             },
             status: 'OK'
         };
+
+        await cacheSet(routeKey, result, ROUTE_TTL);
+
+        return result;
     } catch (error) {
         if (error instanceof GeoError) throw error;
 
@@ -218,6 +240,12 @@ module.exports.getAutoCompleteSuggestions = async (input) => {
         throw new GeoError('Query is required', 400);
     }
 
+    const listKey = `sug:${hash(input.trim().toLowerCase())}`;
+
+    const cachedList = await cacheGet(listKey);
+
+    if (cachedList) return cachedList;
+
     try {
         await throttleNominatim();
 
@@ -233,7 +261,10 @@ module.exports.getAutoCompleteSuggestions = async (input) => {
             timeout: 10000
         });
 
-        return (data || []).map(place => {
+        const suggestions = [];
+        const pipe = redis.pipeline();
+
+        for (const place of data || []) {
             const lat = Number(place.lat);
             const lng = Number(place.lon);
 
@@ -245,20 +276,35 @@ module.exports.getAutoCompleteSuggestions = async (input) => {
                 Number.isFinite(lat) &&
                 Number.isFinite(lng)
             ) {
-                cacheSet(
-                    place.display_name.trim().toLowerCase(),
-                    { lat, ltd: lat, lng }
+                pipe.set(
+                    PREFIX + geoKey(place.display_name),
+                    JSON.stringify({ lat, ltd: lat, lng }),
+                    'EX',
+                    GEO_TTL
                 );
             }
 
-            return {
+            suggestions.push({
                 description: place.display_name,
                 address: place.display_name,
                 lat,
                 ltd: lat,
                 lng
-            };
-        });
+            });
+        }
+
+        // one round trip for all coordinate entries; failure is harmless
+        try {
+            await pipe.exec();
+        } catch {
+            /* ignore */
+        }
+
+        if (suggestions.length) {
+            await cacheSet(listKey, suggestions, SUGGEST_TTL);
+        }
+
+        return suggestions;
     } catch (error) {
         if (error instanceof GeoError) throw error;
 
@@ -268,6 +314,3 @@ module.exports.getAutoCompleteSuggestions = async (input) => {
     }
 };
 
-// getCaptainsInTheRadius was removed: it read the captain collection, which
-// belongs to captain-service. ride-service now fetches active captains from
-// captain-service (GET /captains/active) and filters by distance itself.
