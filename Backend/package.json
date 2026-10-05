@@ -1,28 +1,11 @@
 {
-  "name": "backend",
-  "version": "1.0.0",
-  "description": "",
-  "main": "server.js",
+  "name": "saarthi-backend",
+  "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "install:all": "npm install && npm install --prefix gateway && npm install --prefix services/user-service && npm install --prefix services/captain-service && npm install --prefix services/maps-service && npm install --prefix services/notification-service && npm install --prefix services/ride-service",
+    "dev": "concurrently -n user,captain,maps,notify,ride,gateway -c blue,green,yellow,magenta,cyan,white \"npm run dev --prefix services/user-service\" \"npm run dev --prefix services/captain-service\" \"npm run dev --prefix services/maps-service\" \"npm run dev --prefix services/notification-service\" \"npm run dev --prefix services/ride-service\" \"npm run dev --prefix gateway\""
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "dependencies": {
-    "axios": "^1.20.0",
-    "bcrypt": "^6.0.0",
-    "bcryptjs": "^3.0.3",
-    "cookie-parser": "^1.4.7",
-    "cors": "^2.8.6",
-    "dotenv": "^17.4.2",
-    "express": "^5.2.1",
-    "express-validator": "^7.3.2",
-    "jsonwebtoken": "^9.0.3",
-    "mongoose": "^9.10.0",
-    "nodemon": "^3.1.14",
-    "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.4"
+  "devDependencies": {
+    "concurrently": "^9.0.0"
   }
 }
