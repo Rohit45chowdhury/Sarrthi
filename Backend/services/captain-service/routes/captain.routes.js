@@ -5,6 +5,7 @@ const { body, param } = require('express-validator');
 const captainController = require('../controllers/captain.controller');
 const { authCaptain } = require('../middlewares/auth.middleware');
 const internalOnly = require('../middlewares/internal.middleware');
+const {captainLoginRateLimiter} = require('../middlewares/rateLimit.middleware');
 
 
 // ============================================================
@@ -27,10 +28,20 @@ router.post(
 
 router.post(
     '/login',
+
+    // Rate limit: 5 attempts per 15 minutes
+    captainLoginRateLimiter,
+
     [
-        body('email').isEmail().withMessage('Invalid Email'),
-        body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters long')
+        body('email')
+            .isEmail()
+            .withMessage('Invalid Email'),
+
+        body('password')
+            .isLength({ min: 6 })
+            .withMessage('Password must be at least 6 characters long')
     ],
+
     captainController.loginCaptain
 );
 
