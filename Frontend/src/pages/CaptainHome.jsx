@@ -354,27 +354,18 @@ const CaptainHome = () => {
                 const confirmedRide =
                     response.data.ride || response.data
 
-                setRide(prev => ({
-                    ...prev,
-                    ...confirmedRide,
-                    // keep the populated user if backend returned only an id
-                    user:
-                        confirmedRide?.user &&
-                        typeof confirmedRide.user === 'object'
-                            ? confirmedRide.user
-                            : prev?.user
-                }))
+                console.log('✅ CONFIRMED RIDE:', confirmedRide)
+                console.log('👤 CONFIRMED USER:', confirmedRide?.user)
+
+                setRide(confirmedRide)
 
                 setRidePopupPanel(false)
 
-                // open the live map (route captain -> pickup)
                 setShowLiveTracking(true)
                 setExpanded(false)
 
                 setConfirmRidePopupPanel(OPEN_OTP_AFTER_CONFIRM)
 
-                // send the current position right away, so the user does not
-                // have to wait for the next GPS update / heartbeat
                 sendLocation()
             }
 
@@ -425,26 +416,53 @@ const CaptainHome = () => {
 
             setVerifyingOtp(true)
 
-            // backend startRide reads req.query -> GET + params
             const response = await axios.get(
                 `${BASE_URL}/rides/start-ride`,
                 {
-                    params: { rideId, otp },
+                    params: {
+                        rideId,
+                        otp
+                    },
                     headers: authHeaders()
                 }
             )
 
             if (response.status === 200) {
 
+                /*
+                * IMPORTANT:
+                * /start-ride may return only user ObjectId.
+                * We already have the populated user from /rides/confirm.
+                * So preserve ride.user from CaptainHome state.
+                */
+
+                const startedRide = {
+                    ...response.data,
+
+                    user:
+                        response.data?.user &&
+                        typeof response.data.user === 'object'
+                            ? response.data.user
+                            : ride?.user
+                }
+
+                console.log('🚕 STARTED RIDE:', startedRide)
+                console.log('👤 PASSENGER:', startedRide?.user)
+
                 setConfirmRidePopupPanel(false)
                 setRidePopupPanel(false)
                 setShowLiveTracking(false)
                 setOtp('')
 
-                sessionStorage.setItem('activeRide', JSON.stringify(response.data))
+                sessionStorage.setItem(
+                    'activeRide',
+                    JSON.stringify(startedRide)
+                )
 
                 navigate('/captain-riding', {
-                    state: { ride: response.data }
+                    state: {
+                        ride: startedRide
+                    }
                 })
             }
 
@@ -485,7 +503,7 @@ const CaptainHome = () => {
 
     const passengerName =
         ride?.user?.fullname?.firstname || 'Passenger'
-
+    
     return (
 
     <div className="relative h-[100dvh] w-full overflow-hidden bg-gray-100">

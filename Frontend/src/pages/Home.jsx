@@ -748,23 +748,42 @@ const Home = () => {
 
             {/* Close */}
 
-            <h5
-                ref={panelCloseRef}
-                onClick={() => setPanelOpen(false)}
+            {/* UP / DOWN ARROW */}
+
+            <button
+                type="button"
+                onClick={() => {
+                    // activeField null ho to suggestions list khali dikhegi, isliye default set karo
+                    setActiveField(f => f || 'destination')
+                    setPanelOpen(v => !v)
+                }}
+                aria-label={panelOpen ? 'Close search panel' : 'Open search panel'}
+                aria-expanded={panelOpen}
                 className="
-                    absolute
-                    opacity-0
-                    right-6
-                    top-6
-                    text-2xl
-                    cursor-pointer
-                    text-[#12334A]
-                    hover:text-[#F15A24]
-                    transition-colors
+                        absolute
+                        left-1/2
+                        z-[60]
+                        flex
+                        h-10
+                        w-10
+                        -translate-x-1/2
+                        items-center
+                        justify-center
+                        rounded-full
+                        border
+                        border-gray-200
+                        bg-white
+                        text-2xl
+                        text-[#12334A]
+                        shadow-lg
+                        transition-all
+                        duration-300
+                        hover:text-[#F15A24]
+                        active:scale-90
                 "
             >
-                <i className="ri-arrow-down-wide-line" />
-            </h5>
+                <i className={panelOpen ? 'ri-arrow-down-s-line' : 'ri-arrow-up-s-line'} />
+            </button>
 
 
             {/* Heading */}

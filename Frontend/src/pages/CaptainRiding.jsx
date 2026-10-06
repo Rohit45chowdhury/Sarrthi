@@ -173,6 +173,13 @@ const CaptainRiding = () => {
             ? (Number(rideData.distance) / 1000).toFixed(1)
             : null
 
+    const passengerName =
+    [
+        rideData?.user?.fullname?.firstname,
+        rideData?.user?.fullname?.lastname
+    ]
+        .filter(Boolean)
+        .join(' ') || 'Passenger'
     return (
 
     <div className="relative h-[100dvh] w-full overflow-hidden bg-gray-100">
@@ -282,7 +289,7 @@ const CaptainRiding = () => {
                                     Passenger
                                 </p>
                                 <h2 className="truncate text-lg font-extrabold capitalize">
-                                    {rideData?.user?.fullname?.firstname || 'Passenger'}
+                                    {passengerName}
                                 </h2>
                             </div>
 
