@@ -83,7 +83,7 @@ const pickupIcon = new L.DivIcon({
             color: white;
             font-size: 22px;
         ">
-            📍
+            👤
         </div>
     `,
 
@@ -100,7 +100,7 @@ const NOMINATIM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search'
 // OSRM throttling:
 //  - always recalculate when captain (or pickup) moved >= 25 m
 //  - or when moved >= 5 m AND at least 10 s passed since the last request
-//  - after a failed request, retry at most every 10 s
+//  - after a failed request, retry automatically every 10 s
 const ROUTE_MIN_MOVE_M = 25
 const ROUTE_SMALL_MOVE_M = 5
 const ROUTE_MIN_INTERVAL_MS = 10000
@@ -297,8 +297,10 @@ const TrackingCard = ({
 
     } else if (!hasPickup) {
 
+        // 'idle' = the ride has no pickup address and no coordinates,
+        // so there is nothing to wait for
         status =
-            geocodeStatus === 'error'
+            geocodeStatus === 'error' || geocodeStatus === 'idle'
                 ? {
                     text: 'Unable to find the pickup point on the map.',
                     loading: false
@@ -459,6 +461,10 @@ const LiveTracking = ({
     const abortRef = useRef(null)
     const requestIdRef = useRef(0)
 
+    // after a failed OSRM request the route is retried automatically
+    const retryTimerRef = useRef(null)
+    const [retryTick, setRetryTick] = useState(0)
+
     const lastRouteRef = useRef({
         from: null,
         to: null,
@@ -546,6 +552,7 @@ const LiveTracking = ({
         return () => {
             mountedRef.current = false
             abortRef.current?.abort()
+            clearTimeout(retryTimerRef.current)
         }
 
     }, [])
@@ -714,6 +721,7 @@ const LiveTracking = ({
 
         requestIdRef.current++
         abortRef.current?.abort()
+        clearTimeout(retryTimerRef.current)
 
         lastRouteRef.current = {
             from: null,
@@ -760,6 +768,10 @@ const LiveTracking = ({
         }
 
         const requestId = ++requestIdRef.current
+
+        // stop the previous request and any pending retry
+        abortRef.current?.abort()
+        clearTimeout(retryTimerRef.current)
 
         const controller = new AbortController()
         abortRef.current = controller
@@ -825,9 +837,17 @@ const LiveTracking = ({
                 lastRouteRef.current.failed = true
 
                 setRouteError('Unable to calculate the route right now.')
+
+                // try again in 10 s even if the captain is standing still
+                clearTimeout(retryTimerRef.current)
+
+                retryTimerRef.current = setTimeout(
+                    () => setRetryTick(t => t + 1),
+                    ROUTE_MIN_INTERVAL_MS
+                )
             })
 
-    }, [tracking, hasBoth, cLat, cLng, pLat, pLng])
+    }, [tracking, hasBoth, cLat, cLng, pLat, pLng, retryTick])
 
 
     // ================= MAP CENTER (initial) =================

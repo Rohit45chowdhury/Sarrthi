@@ -22,7 +22,9 @@ const BASE_URL =
     import.meta.env.VITE_API_URL ||
     'http://localhost:3000'
 
-const LOCATION_HEARTBEAT_MS = 15000
+// captain location goes to the server once every 5 seconds
+// (server -> Kafka -> bulk write in captain-service)
+const LOCATION_SEND_MS = 5000
 
 // false -> after "Accept" the captain sees the live map first and opens the
 //          OTP popup with the "Reached pickup" button.
@@ -73,6 +75,9 @@ const CaptainHome = () => {
     const heartbeatRef = useRef(null)
     const lastPositionRef = useRef(null)
 
+    // time of the last location sent to the server (for the 5 sec throttle)
+    const lastSentRef = useRef(0)
+
     // lets the socket handler read the latest value without re-subscribing.
     // true while the captain is entering the OTP OR is already tracking an
     // accepted ride -> a new "new-ride" must not replace the current ride.
@@ -93,9 +98,19 @@ const CaptainHome = () => {
 
     /* ================= LOCATION TRACKING ================= */
 
-    const sendLocation = () => {
+    // GPS can fire many times per second, but the server gets one update
+    // every 5 seconds. force = true skips the throttle (after join / accept).
+    const sendLocation = (force = false) => {
 
         if (!socket || !captain?._id || !lastPositionRef.current) return
+
+        const now = Date.now()
+
+        if (!force && now - lastSentRef.current < LOCATION_SEND_MS - 500) {
+            return
+        }
+
+        lastSentRef.current = now
 
         socket.emit('update-location-captain', {
             userId: captain._id,
@@ -125,7 +140,7 @@ const CaptainHome = () => {
                 (res) => {
 
                     if (res?.ok) {
-                        sendLocation()   // join is saved, server accepts it now
+                        sendLocation(true)   // join is saved, server accepts it now
                     } else {
                         console.error('Join failed:', res?.message)
                     }
@@ -186,7 +201,7 @@ const CaptainHome = () => {
             }
         )
 
-        // 2) continuous high accuracy updates
+        // 2) continuous high accuracy updates (throttled inside sendLocation)
         locationWatchIdRef.current =
             navigator.geolocation.watchPosition(
                 onSuccess,
@@ -198,9 +213,9 @@ const CaptainHome = () => {
                 }
             )
 
-        // 3) heartbeat: watchPosition does not fire while standing still
+        // 3) every 5 sec: watchPosition does not fire while standing still
         heartbeatRef.current =
-            setInterval(sendLocation, LOCATION_HEARTBEAT_MS)
+            setInterval(() => sendLocation(), LOCATION_SEND_MS)
     }
 
     const stopLocationTracking = () => {
@@ -366,7 +381,7 @@ const CaptainHome = () => {
 
                 setConfirmRidePopupPanel(OPEN_OTP_AFTER_CONFIRM)
 
-                sendLocation()
+                sendLocation(true)
             }
 
         } catch (error) {
@@ -503,7 +518,7 @@ const CaptainHome = () => {
 
     const passengerName =
         ride?.user?.fullname?.firstname || 'Passenger'
-    
+
     return (
 
     <div className="relative h-[100dvh] w-full overflow-hidden bg-gray-100">

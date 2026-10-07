@@ -4,6 +4,7 @@ const { validationResult } = require('express-validator');
 const captainModel = require('../models/captain.model');
 const blackListTokenModel = require('../models/blackListToken.model');
 const captainService = require('../services/captain.service');
+const { publishLocation } = require('../services/locationKafka.service');
 
 const RIDE_SERVICE_URL = process.env.RIDE_SERVICE_URL || 'http://127.0.0.1:3003';
 
@@ -78,6 +79,9 @@ module.exports.registerCaptain = async (req, res) => {
         return res.status(500).json({ message: 'Server error' });
     }
 };
+
+
+
 
 
 // ============================================================
@@ -315,19 +319,27 @@ module.exports.getCaptainById = async (req, res) => {
 };
 
 // PATCH /captains/:id/location   body: { ltd, lng }
+// Location Kafka mein jaati hai, consumer DB mein bulk write karta hai.
+// Kafka down ho to direct DB write (fallback).
 module.exports.updateLocation = async (req, res) => {
 
     if (validationFailed(req, res)) return;
 
     try {
+        const captainId = req.params.id;
+        const ltd = Number(req.body.ltd);
+        const lng = Number(req.body.lng);
+
+        const queued = await publishLocation({ captainId, ltd, lng });
+
+        if (queued) {
+            return res.status(202).json({ success: true, queued: true });
+        }
+
+        // fallback: direct write
         const captain = await captainModel.findByIdAndUpdate(
-            req.params.id,
-            {
-                $set: {
-                    'location.ltd': Number(req.body.ltd),
-                    'location.lng': Number(req.body.lng)
-                }
-            },
+            captainId,
+            { $set: { 'location.ltd': ltd, 'location.lng': lng } },
             { new: true }
         );
 
