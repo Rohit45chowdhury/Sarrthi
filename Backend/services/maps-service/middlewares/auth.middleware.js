@@ -30,7 +30,14 @@ function rememberOk(token) {
     okTokens.set(token, Date.now() + TOKEN_CACHE_MS);
 }
 
-// -> 'ok' | 'denied' | 'error'
+// header pehle, cookie fallback (cookie ports ke beech share hoti hai)
+function getToken(req) {
+    const header = req.headers.authorization || '';
+    const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
+    return bearer || req.cookies?.token || null;
+}
+
+// -> { result: 'ok' | 'denied' | 'error', reason? }
 async function check(url, token) {
     try {
         const { data } = await http.get(url, {
@@ -38,21 +45,29 @@ async function check(url, token) {
         });
 
         const entity = data?.user || data?.captain || data;
-        return entity?._id ? 'ok' : 'denied';
+
+        return entity?._id
+            ? { result: 'ok' }
+            : { result: 'denied', reason: 'Profile has no _id' };
 
     } catch (error) {
         const status = error.response?.status;
 
-        if (status === 401 || status === 403 || status === 404) return 'denied';
+        if (status === 401 || status === 403 || status === 404) {
+            return {
+                result: 'denied',
+                reason: error.response?.data?.message || `HTTP ${status}`
+            };
+        }
 
         console.error('Auth check failed:', url, error.code || error.message);
-        return 'error';
+        return { result: 'error', reason: error.code || error.message };
     }
 }
 
 // Allows either:
 //  1) another Saarthi service  (x-internal-key header = INTERNAL_API_KEY)
-//  2) a logged-in user OR captain (cookie / Bearer token)
+//  2) a logged-in user OR captain (Bearer token / cookie)
 module.exports = async (req, res, next) => {
 
     const key = process.env.INTERNAL_API_KEY;
@@ -61,10 +76,10 @@ module.exports = async (req, res, next) => {
         return next();
     }
 
-    const token = req.cookies?.token || req.headers.authorization?.split(' ')[1];
+    const token = getToken(req);
 
-    if (!token) {
-        return res.status(401).json({ message: 'Unauthorized' });
+    if (!token || token === 'null' || token === 'undefined') {
+        return res.status(401).json({ message: 'Token missing' });
     }
 
     if (cachedOk(token)) {
@@ -73,21 +88,28 @@ module.exports = async (req, res, next) => {
 
     const asUser = await check(`${USER_SERVICE_URL}/users/profile`, token);
 
-    if (asUser === 'ok') {
+    if (asUser.result === 'ok') {
         rememberOk(token);
         return next();
     }
 
     const asCaptain = await check(`${CAPTAIN_SERVICE_URL}/captains/profile`, token);
 
-    if (asCaptain === 'ok') {
+    if (asCaptain.result === 'ok') {
         rememberOk(token);
         return next();
     }
 
-    if (asUser === 'denied' && asCaptain === 'denied') {
-        return res.status(401).json({ message: 'Unauthorized' });
+    if (asUser.result === 'denied' && asCaptain.result === 'denied') {
+        console.log('maps auth denied -> user:', asUser.reason, '| captain:', asCaptain.reason);
+
+        return res.status(401).json({
+            message: 'Unauthorized',
+            user: asUser.reason,
+            captain: asCaptain.reason
+        });
     }
 
+    console.error('maps auth unavailable -> user:', asUser.reason, '| captain:', asCaptain.reason);
     return res.status(503).json({ message: 'Auth service unavailable' });
 };

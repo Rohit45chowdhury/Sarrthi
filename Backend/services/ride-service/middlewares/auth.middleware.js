@@ -1,12 +1,10 @@
 const http = require('../services/http');
 const { USER_SERVICE_URL, CAPTAIN_SERVICE_URL } = require('../services/config');
 
-// rides-service has no user/captain/blacklist models, so it asks the owning
-// service to validate the token. That also keeps role separation (a user token
-// can't pass authCaptain) and blacklist checks in one place.
-
 function getToken(req) {
-    return req.cookies?.token || req.headers.authorization?.split(' ')[1];
+    const header = req.headers.authorization || '';
+    const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
+    return bearer || req.cookies?.token;
 }
 
 function makeAuth(profileUrl, reqKey, label) {
@@ -14,7 +12,7 @@ function makeAuth(profileUrl, reqKey, label) {
         const token = getToken(req);
 
         if (!token) {
-            return res.status(401).json({ message: 'Unauthorized' });
+            return res.status(401).json({ message: 'Token missing' });
         }
 
         try {
@@ -36,7 +34,10 @@ function makeAuth(profileUrl, reqKey, label) {
             const status = error.response?.status;
 
             if (status === 401 || status === 403 || status === 404) {
-                return res.status(401).json({ message: 'Unauthorized' });
+                console.log(`${label} auth denied:`, error.response?.data?.message);
+                return res.status(401).json({
+                    message: error.response?.data?.message || 'Unauthorized'
+                });
             }
 
             console.error(`${label} auth error:`, error.code, error.config?.url, error.message);

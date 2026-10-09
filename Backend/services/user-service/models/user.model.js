@@ -1,57 +1,43 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcrypt'); // agar tu bcryptjs use karta hai to yahan require('bcryptjs') kar de
 const jwt = require('jsonwebtoken');
 
-
-const userSchema = new mongoose.Schema({
-
-    fullname: {
-        firstname: {
-            type: String,
-            required: true,
-            minlength: [3, 'First name must be at least 3 characters long']
+const userSchema = new mongoose.Schema(
+    {
+        fullname: {
+            firstname: { type: String, required: true, trim: true },
+            lastname: { type: String, default: '', trim: true }
         },
-        lastname: {
-            type: String,
-            minlength: [3, 'Last name must be at least 3 characters long']
-        }
+        email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+
+        // Google / OTP se aaye users ka password nahi hota, isliye required nahi hai
+        password: { type: String, select: false },
+
+        googleId: { type: String, unique: true, sparse: true },
+        avatar: { type: String, default: '' },
+        providers: { type: [String], default: [] }, // 'password', 'email', 'google'
+        lastLoginAt: Date
+
+        // NOTE: tere purane model me aur fields hon (jaise socketId) to unhe yahan wapas add kar de
     },
+    { timestamps: true }
+);
 
-    email: {
-        type: String,
-        required: true,
-        unique: true,
-        lowercase: true,   // "A@x.com" and "a@x.com" are the same account
-        trim: true,
-        minlength: [5, 'Email must be at least 5 characters long']
-    },
-
-    password: {
-        type: String,
-        required: true,
-        select: false
-    }
-
-    // NOTE: socketId was removed. Sockets now live in notification-service.
-
-});
-
-
-userSchema.methods.generateAuthToken = function () {
-    return jwt.sign(
-        { _id: this._id },
-        process.env.JWT_SECRET,
-        { expiresIn: '24h' }
-    );
+userSchema.statics.hashPassword = function (password) {
+    return bcrypt.hash(password, 10);
 };
 
 userSchema.methods.comparePassword = async function (password) {
-    return await bcrypt.compare(password, this.password);
+    if (!this.password) return false; // password-less account (Google / OTP)
+    return bcrypt.compare(password, this.password);
 };
 
-userSchema.statics.hashPassword = async function (password) {
-    return await bcrypt.hash(password, 10);
+userSchema.methods.generateAuthToken = function () {
+    return jwt.sign(
+        { _id: this._id, id: this._id, email: this.email, role: 'user' },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+    );
 };
 
-
-module.exports = mongoose.model('user', userSchema);
+module.exports = mongoose.models.User || mongoose.model('User', userSchema);

@@ -3,16 +3,7 @@ const { validationResult } = require('express-validator');
 const userModel = require('../models/user.model');
 const userService = require('../services/user.service');
 const blackListTokenModel = require('../models/blackListToken.model');
-
-
-// Never send the password hash to the client
-// (create() and select('+password') both return it on the document).
-function publicUser(user) {
-    const obj = user?.toObject ? user.toObject() : { ...user };
-    delete obj.password;
-    delete obj.__v;
-    return obj;
-}
+const publicUser = require('../utils/publicUser');
 
 
 // POST /users/register
@@ -76,11 +67,14 @@ module.exports.loginUser = async (req, res) => {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
 
+        // Google / OTP wale account me password nahi hota -> comparePassword false deta hai
         const isMatch = await user.comparePassword(password);
 
         if (!isMatch) {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
+
+        await userModel.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
 
         const token = user.generateAuthToken();
 

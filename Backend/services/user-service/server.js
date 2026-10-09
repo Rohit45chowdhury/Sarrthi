@@ -15,6 +15,18 @@ if (!process.env.INTERNAL_API_KEY) {
     console.warn('WARNING: INTERNAL_API_KEY is not set. GET /users/:id is disabled (ride-service cannot show passenger names).');
 }
 
+if (!process.env.GOOGLE_CLIENT_ID) {
+    console.warn('WARNING: GOOGLE_CLIENT_ID is not set. POST /auth/google will fail.');
+}
+
+if (!process.env.REDIS_URL) {
+    console.warn('WARNING: REDIS_URL is not set. Email OTP (/auth/send-code, /auth/verify-code) will not work.');
+}
+
+if (!process.env.SMTP_HOST || !process.env.MAIL_FROM) {
+    console.warn('WARNING: SMTP_* / MAIL_FROM not set. OTP emails cannot be sent.');
+}
+
 connectToDb().then(() => {
     http.createServer(app).listen(port, () => {
         console.log('Saarthi User Service');

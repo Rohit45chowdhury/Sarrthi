@@ -15,8 +15,11 @@
     "express": "^4.22.3",
     "express-rate-limit": "^8.7.0",
     "express-validator": "^7.3.2",
+    "googleapis": "^185.0.0",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^8.24.5"
+    "mongoose": "^8.24.5",
+    "nodemailer": "^10.0.16"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

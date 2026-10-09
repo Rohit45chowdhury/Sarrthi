@@ -5,7 +5,7 @@ const TOPIC = process.env.KAFKA_LOCATION_TOPIC || 'captain-location';
 
 const kafka = new Kafka({
     clientId: 'saarthi-captain-service',
-    brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
+    brokers: (process.env.KAFKA_BROKERS || 'localhost:29092').split(','),
     logLevel: logLevel.WARN,
     retry: { retries: 3 }
 });

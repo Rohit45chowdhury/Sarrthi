@@ -1,61 +1,115 @@
+
 import React, { useContext, useEffect, useState } from "react";
 import { UserDataContext } from "../context/UserContext";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
+const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
+
 const UserProtectWrapper = ({ children }) => {
-    const token = localStorage.getItem("token");
-
     const navigate = useNavigate();
-
     const { setUser } = useContext(UserDataContext);
-
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
-        // No token
-        if (!token) {
-            navigate("/login");
-            return;
-        }
+        const token = localStorage.getItem("token");
+        let cancelled = false;
 
-        // Get logged-in user profile
-        axios
-            .get(
-                `${import.meta.env.VITE_API_URL || "http://localhost:3000"}/users/profile`,
-                {
-                    headers: {
-                        Authorization: `Bearer ${token}`,
+        const checkUser = async () => {
+            if (!token) {
+                setIsLoading(false);
+                navigate("/login", { replace: true });
+                return;
+            }
+
+            const config = {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+            };
+
+            try {
+                let user;
+
+                // 1. Try normal user profile first
+                try {
+                    const response = await axios.get(
+                        `${API}/users/profile`,
+                        config
+                    );
+
+                    user = response.data.user ?? response.data;
+                } catch (profileError) {
+                    // 2. Fallback for OTP / Google login
+                    const response = await axios.get(
+                        `${API}/auth/me`,
+                        config
+                    );
+
+                    user = response.data.user ?? response.data;
+                }
+
+                if (cancelled) return;
+
+                if (!user || !(user._id || user.id) || !user.email) {
+                    throw new Error("Invalid user profile response");
+                }
+
+                const firstName =
+                    typeof user.fullname === "object"
+                        ? user.fullname?.firstname
+                        : user.fullname;
+
+                const normalizedUser = {
+                    ...user,
+                    _id: user._id || user.id,
+                    fullname: {
+                        firstname:
+                            firstName || user.email.split("@")[0],
+                        lastname:
+                            typeof user.fullname === "object"
+                                ? user.fullname?.lastname || ""
+                                : "",
                     },
-                }
-            )
-            .then((response) => {
-                console.log("User Profile:", response.data);
+                };
 
-                if (response.status === 200) {
-                    setUser(response.data);
-                    setIsLoading(false);
-                }
-            })
-            .catch((error) => {
+                setUser(normalizedUser);
+                setIsLoading(false);
+            } catch (error) {
+                if (cancelled) return;
+
                 console.error(
-                    "User profile error:",
+                    "Authentication check failed:",
                     error.response?.data || error.message
                 );
 
-                // Token invalid / expired
                 localStorage.removeItem("token");
+                setUser(null);
+                setIsLoading(false);
+                navigate("/login", { replace: true });
+            }
+        };
 
-                navigate("/login");
-            });
-    }, [token, navigate, setUser]);
+        checkUser();
 
-    // Check authentication
+        return () => {
+            cancelled = true;
+        };
+    }, [navigate, setUser]);
+
     if (isLoading) {
-        return <div>Loading...</div>;
+        return (
+            <div className="flex min-h-screen items-center justify-center text-[#12334A]">
+                Checking authentication...
+            </div>
+        );
     }
 
-    // User authenticated
+    // Redirecting to login when authentication fails
+    if (!localStorage.getItem("token")) {
+        return null;
+    }
+
     return <>{children}</>;
 };
 
