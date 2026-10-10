@@ -10,6 +10,10 @@ const crypto = require('crypto');
 const NEARBY_RADIUS_KM = Number(process.env.NEARBY_RADIUS_KM) || 100;
 const MAX_CAPTAINS_PER_RIDE = Number(process.env.MAX_CAPTAINS_PER_RIDE) || 10;
 
+// A pending ride older than this is not restored when the app is reopened
+// (otherwise an abandoned pending ride would come back forever)
+const PENDING_MAX_AGE_MS = Number(process.env.PENDING_RIDE_MAX_AGE_MS) || 10 * 60 * 1000;
+
 // Canonical internal names: auto | car | motorcycle
 function normalizeVehicleType(type) {
     const map = {
@@ -283,4 +287,90 @@ module.exports.getCaptainStats = async (captainId) => {
         totalEarnings: row?.totalEarnings || 0,
         todayEarnings: row?.todayEarnings || 0
     };
+};
+
+
+// ---------------- CURRENT RIDE (restore after app reopen) ----------------
+module.exports.getCurrentRideForUser = async (userId) => {
+    return rideModel
+        .findOne({
+            user: userId,
+            $or: [
+                { status: { $in: ['accepted', 'ongoing'] } },
+                {
+                    status: 'pending',
+                    createdAt: { $gte: new Date(Date.now() - PENDING_MAX_AGE_MS) }
+                }
+            ]
+        })
+        .sort({ createdAt: -1 })
+        .select('+otp'); // controller decides whether the otp is sent
+};
+
+module.exports.getCurrentRideForCaptain = async (captainId) => {
+    return rideModel
+        .findOne({ captain: captainId, status: { $in: ['accepted', 'ongoing'] } })
+        .sort({ createdAt: -1 });
+};
+
+// ---------------- HISTORY ----------------
+module.exports.getRideHistory = async ({ userId, captainId, page = 1, limit = 10 }) => {
+    const filter = { status: { $in: ['completed', 'cancelled'] } };
+    if (userId) filter.user = userId;
+    else filter.captain = captainId;
+
+    const [rides, total] = await Promise.all([
+        rideModel
+            .find(filter)
+            .sort({ createdAt: -1 })
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .lean(),
+        rideModel.countDocuments(filter)
+    ]);
+
+    return { rides, total };
+};
+
+// ---------------- CANCEL RIDE ----------------
+// user:    pending / accepted can be cancelled
+//          (pendingOnly = true -> only pending; used by "Try again" so a ride
+//          that a captain accepted a second ago is never cancelled by mistake)
+// captain: only accepted
+// ongoing / completed rides cannot be cancelled
+module.exports.cancelRide = async ({ rideId, userId, captainId, reason, pendingOnly = false }) => {
+    if (!rideId) throw new Error('Ride id is required');
+
+    const filter = { _id: rideId };
+
+    if (userId) {
+        filter.user = userId;
+        filter.status = pendingOnly
+            ? 'pending'
+            : { $in: ['pending', 'accepted'] };
+    } else if (captainId) {
+        filter.captain = captainId;
+        filter.status = 'accepted';
+    } else {
+        throw new Error('Not allowed');
+    }
+
+    // atomic: the status check and the update happen in one step, so a ride
+    // accepted or started at the same moment cannot be cancelled twice / wrongly
+    const ride = await rideModel.findOneAndUpdate(
+        filter,
+        {
+            status: 'cancelled',
+            cancelledBy: userId ? 'user' : 'captain',
+            cancelledAt: new Date(),
+            ...(reason ? { cancelReason: String(reason).trim().slice(0, 200) } : {})
+        },
+        { returnDocument: 'after' }
+    );
+
+    if (!ride) {
+        throw new Error('Ride cannot be cancelled (already started, completed or cancelled)');
+    }
+
+    return ride;
 };

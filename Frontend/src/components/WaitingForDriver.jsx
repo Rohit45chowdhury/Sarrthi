@@ -213,6 +213,20 @@ const WaitingForDriver = (props) => {
 
                         </div>
 
+                        {/* CANCEL RIDE
+                            Works until the captain verifies the OTP. After that
+                            the ride is ongoing and the server rejects the cancel. */}
+                        {props.onCancel && (
+                            <button
+                                type="button"
+                                onClick={props.onCancel}
+                                disabled={props.cancelling}
+                                className="w-full rounded-xl border border-red-200 bg-white py-3 font-semibold text-red-600 transition-all hover:bg-red-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {props.cancelling ? 'Cancelling...' : 'Cancel ride'}
+                            </button>
+                        )}
+
                     </div>
 
                 </div>

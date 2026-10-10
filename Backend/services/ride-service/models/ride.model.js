@@ -32,6 +32,11 @@ const rideSchema = new mongoose.Schema(
 
         otp: { type: String, select: false, required: true },
 
+        // ===== CANCELLATION =====
+        cancelledBy: { type: String, enum: ['user', 'captain'] },
+        cancelledAt: { type: Date },
+        cancelReason: { type: String, maxlength: 200 },
+
         // ===== RATING (user rates captain after the ride) =====
         rating: {
             value: { type: Number, min: 1, max: 5 },
@@ -41,5 +46,10 @@ const rideSchema = new mongoose.Schema(
     },
     { timestamps: true }
 );
+
+// ===== INDEXES =====
+// current ride + history lookups (GET /rides/active, /rides/history)
+rideSchema.index({ user: 1, status: 1, createdAt: -1 });
+rideSchema.index({ captain: 1, status: 1, createdAt: -1 });
 
 module.exports = mongoose.model('ride', rideSchema);

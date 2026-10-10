@@ -2,7 +2,8 @@ import React, {
     useRef,
     useState,
     useContext,
-    useEffect
+    useEffect,
+    useCallback
 } from 'react'
 
 import { useGSAP } from '@gsap/react'
@@ -16,6 +17,7 @@ import ConfirmRide from '../components/ConfirmRide'
 import LookingForDriver from '../components/LookingForDriver'
 import WaitingForDriver from '../components/WaitingForDriver'
 import LiveTracking from '../components/LiveTracking'
+import RideHistory from '../components/RideHistory'
 
 import { UserDataContext } from '../context/UserContext'
 import { SocketContext } from '../context/SocketContext'
@@ -26,6 +28,13 @@ const BASE_URL =
 
 // how long we search for a driver before showing "No drivers available"
 const DRIVER_SEARCH_TIMEOUT = 30000
+
+// backend stores "motorcycle", the frontend panels use the key "moto"
+const FRONT_VEHICLE_KEY = {
+    auto: 'auto',
+    car: 'car',
+    motorcycle: 'moto'
+}
 
 const authHeaders = () => ({
     Authorization: `Bearer ${localStorage.getItem('token')}`
@@ -94,6 +103,16 @@ const Home = () => {
     // [lat, lng] of the captain, updated through "captain-location-update"
     const [captainLocation, setCaptainLocation] = useState(null)
 
+    // past rides sheet
+    const [historyOpen, setHistoryOpen] = useState(false)
+
+    // true until the first "active ride" check finished (avoids a flash of
+    // the search screen before the running ride is restored)
+    const [restoring, setRestoring] = useState(true)
+
+    // true while a cancel request is running (disables the cancel buttons)
+    const [cancelling, setCancelling] = useState(false)
+
     // search | vehicle | confirm | looking | waiting
     const [activePanel, setActivePanel] = useState('search')
 
@@ -130,6 +149,9 @@ const Home = () => {
         destination: 0
     })
 
+    // "<rideId>:<status>" of the last ride we restored -> same state is not applied twice
+    const lastRestoredRef = useRef('')
+
     // ================= USER SOCKET JOIN =================
 
     useEffect(() => {
@@ -150,6 +172,7 @@ const Home = () => {
             joinUser()
         }
 
+        // runs again after every reconnect (new socket.id)
         socket.on('connect', joinUser)
 
         return () => {
@@ -157,6 +180,248 @@ const Home = () => {
         }
 
     }, [socket, user?._id])
+
+    // ================= RESTORE RUNNING RIDE =================
+
+    // Asks the server for the running ride and puts the screen back into the
+    // right state. The database is the source of truth, so this works after the
+    // app was closed, the phone restarted or the socket missed an event.
+    //
+    // includePending = true only on the first load. Later checks (app comes
+    // back to the foreground / socket reconnects) restore only accepted and
+    // ongoing rides, so a ride the user backed out of is not forced open again.
+    const restoreRide = useCallback(async (includePending = false) => {
+
+        try {
+
+            const { data } = await axios.get(
+                `${BASE_URL}/rides/active`,
+                { headers: authHeaders() }
+            )
+
+            const running = data?.ride
+
+            // null  -> server confirmed: no running ride
+            if (!running) return null
+
+            if (running.status === 'pending' && !includePending) return running
+
+            const key = `${running._id}:${running.status}`
+
+            if (lastRestoredRef.current === key) return running
+
+            lastRestoredRef.current = key
+
+            // ride already started -> go to the riding page
+            if (running.status === 'ongoing') {
+
+                navigate('/riding', { state: { ride: running } })
+
+                return running
+            }
+
+            const type =
+                FRONT_VEHICLE_KEY[running.vehicleType] ||
+                running.vehicleType ||
+                null
+
+            setRide(running)
+            setPickup(running.pickup || '')
+            setDestination(running.destination || '')
+            setVehicleType(type)
+            setFare(type ? { [type]: running.fare } : {})
+
+            setNoDriverFound(false)
+
+            if (running.status === 'accepted') {
+
+                // captain is on the way: map in tracking mode, position arrives
+                // through "captain-location-update"
+                setCaptainLocation(null)
+                setShowLiveTracking(true)
+
+                setActivePanel('waiting')
+
+            } else {
+
+                // pending: still searching for a driver
+                setShowLiveTracking(false)
+
+                setActivePanel('looking')
+            }
+
+            return running
+
+        } catch (error) {
+
+            console.error(
+                'RESTORE RIDE ERROR:',
+                error.response?.data || error.message
+            )
+        }
+
+    }, [navigate])
+
+    // first load
+    useEffect(() => {
+
+        restoreRide(true).finally(() => setRestoring(false))
+
+    }, [restoreRide])
+
+    // app comes back to the foreground / socket reconnects: an event
+    // ("ride-accepted", "ride-started") may have been missed meanwhile
+    useEffect(() => {
+
+        const handleVisible = () => {
+
+            if (document.visibilityState === 'visible') {
+                restoreRide(false)
+            }
+        }
+
+        const handleReconnect = () => restoreRide(false)
+
+        document.addEventListener('visibilitychange', handleVisible)
+        socket?.io?.on('reconnect', handleReconnect)
+
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisible)
+            socket?.io?.off('reconnect', handleReconnect)
+        }
+
+    }, [socket, restoreRide])
+
+    // ================= CANCEL RIDE =================
+
+    // back to the search screen, forget everything about the old ride
+    const resetRideState = () => {
+
+        setRide(null)
+        setShowLiveTracking(false)
+        setCaptainLocation(null)
+        setNoDriverFound(false)
+        setActivePanel('search')
+
+        lastRestoredRef.current = ''
+    }
+
+    // returns true when the ride is gone (cancelled or already not running)
+    //
+    // ask         -> show the "Cancel this ride?" confirmation
+    // pendingOnly -> cancel only if no captain accepted yet (used by "Try again",
+    //                so a ride that was accepted a second ago is never killed)
+    // silent      -> no alert when it fails
+    const cancelRide = async ({
+        ask = true,
+        pendingOnly = false,
+        silent = false
+    } = {}) => {
+
+        const rideId = ride?._id
+
+        if (!rideId) {
+            resetRideState()
+            return true
+        }
+
+        if (cancelling) return false
+
+        if (ask && !window.confirm('Cancel this ride?')) return false
+
+        setCancelling(true)
+
+        try {
+
+            await axios.post(
+                `${BASE_URL}/rides/cancel`,
+                { rideId, pendingOnly },
+                { headers: authHeaders() }
+            )
+
+            resetRideState()
+
+            return true
+
+        } catch (error) {
+
+            console.error(
+                'CANCEL RIDE ERROR:',
+                error.response?.data || error.message
+            )
+
+            // Ask the server what really happened:
+            // null      -> ride is already cancelled / expired -> just reset
+            // accepted  -> a captain accepted it -> screen moves to waiting
+            // ongoing   -> ride started -> screen moves to the riding page
+            const active = await restoreRide(false)
+
+            if (active === null) {
+                resetRideState()
+                return true
+            }
+
+            if (!silent) {
+                alert(
+                    error.response?.data?.message ||
+                    'Unable to cancel the ride.'
+                )
+            }
+
+            return false
+
+        } finally {
+
+            setCancelling(false)
+        }
+    }
+
+    // "Try again" on the no-driver screen: cancel the old pending ride first,
+    // otherwise two pending rides would exist for this user
+    const retryRide = async () => {
+
+        if (ride?._id) {
+
+            const done = await cancelRide({
+                ask: false,
+                pendingOnly: true,
+                silent: true
+            })
+
+            if (!done) return
+        }
+
+        setConfirmRidePanel(true)
+    }
+
+    // the captain cancelled the ride
+    useEffect(() => {
+
+        if (!socket) return
+
+        const handleCancelled = data => {
+
+            if (
+                data?.rideId &&
+                ride?._id &&
+                String(data.rideId) !== String(ride._id)
+            ) {
+                return
+            }
+
+            resetRideState()
+
+            alert('Your captain cancelled the ride. Please book again.')
+        }
+
+        socket.on('ride-cancelled', handleCancelled)
+
+        return () => {
+            socket.off('ride-cancelled', handleCancelled)
+        }
+
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [socket, ride?._id])
 
     // ================= RIDE ACCEPTED =================
 
@@ -684,6 +949,35 @@ const Home = () => {
     </div>
 
 
+    {/* PAST RIDES */}
+
+    <button
+        type="button"
+        onClick={() => setHistoryOpen(true)}
+        aria-label="Past rides"
+        className={`
+            absolute right-[4.5rem] top-5 z-50
+            h-11 w-11
+            bg-white
+            rounded-full
+            shadow-md
+            flex items-center justify-center
+            text-[#12334A]
+            transition-all duration-200
+            hover:bg-[#F15A24]
+            hover:text-white
+            active:scale-95
+            ${
+                activePanel === 'search' && !panelOpen
+                    ? 'opacity-100'
+                    : 'opacity-0 pointer-events-none'
+            }
+        `}
+    >
+        <i className="text-xl ri-history-line" />
+    </button>
+
+
     {/* LOGOUT */}
 
     <button
@@ -1022,7 +1316,9 @@ const Home = () => {
             vehicleType={vehicleType}
             noDriverFound={noDriverFound}
             setVehicleFound={setVehicleFound}
-            onRetry={() => setConfirmRidePanel(true)}
+            onRetry={retryRide}
+            onCancel={() => cancelRide()}
+            cancelling={cancelling}
         />
     </div>
 
@@ -1039,8 +1335,31 @@ const Home = () => {
             setVehicleFound={setVehicleFound}
             setWaitingForDriver={setWaitingForDriver}
             waitingForDriver={waitingForDriver}
+            onCancel={() => cancelRide()}
+            cancelling={cancelling}
         />
     </div>
+
+
+    {/* PAST RIDES SHEET */}
+
+    {historyOpen && (
+        <RideHistory
+            role="user"
+            onClose={() => setHistoryOpen(false)}
+        />
+    )}
+
+
+    {/* FIRST LOAD: checking for a running ride */}
+
+    {restoring && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-white/80">
+            <p className="text-sm font-semibold text-[#12334A]">
+                Loading your ride...
+            </p>
+        </div>
+    )}
 
 </div>
     )

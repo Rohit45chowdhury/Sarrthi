@@ -28,10 +28,14 @@ const LookingForDriver = (props) => {
 
     const noDriverFound = !!props.noDriverFound
 
+    const cancelling = !!props.cancelling
+
     return (
     <div className="relative w-full max-h-[75vh] overflow-y-auto pb-6">
 
-        {/* CLOSE BUTTON */}
+        {/* CLOSE BUTTON
+            Only hides this panel. The ride keeps searching for a driver.
+            Use the "Cancel ride" button to really cancel it. */}
         <button
             type="button"
             onClick={() => props.setVehicleFound(false)}
@@ -74,21 +78,27 @@ const LookingForDriver = (props) => {
                 </p>
 
                 <div className="mt-5 flex gap-3">
+
+                    {/* cancels the pending ride, back to the search screen */}
                     <button
                         type="button"
-                        onClick={() => props.setVehicleFound(false)}
-                        className="w-1/2 rounded-xl border border-gray-300 bg-white py-3 font-semibold text-[#12334A]"
+                        onClick={props.onCancel}
+                        disabled={cancelling}
+                        className="w-1/2 rounded-xl border border-gray-300 bg-white py-3 font-semibold text-[#12334A] disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        Cancel
+                        {cancelling ? 'Cancelling...' : 'Cancel'}
                     </button>
 
+                    {/* cancels the old pending ride, then opens the confirm panel */}
                     <button
                         type="button"
                         onClick={props.onRetry}
-                        className="w-1/2 rounded-xl bg-[#12334A] py-3 font-semibold text-white active:scale-[0.98]"
+                        disabled={cancelling}
+                        className="w-1/2 rounded-xl bg-[#12334A] py-3 font-semibold text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         Try again
                     </button>
+
                 </div>
 
             </div>
@@ -136,7 +146,7 @@ const LookingForDriver = (props) => {
         )}
 
 
-        {/* ROUTE CARD + FARE CARD (hidden when no driver is found) */}
+        {/* ROUTE CARD + FARE CARD + CANCEL (hidden when no driver is found) */}
         {!noDriverFound && (
             <>
                 {/* ROUTE CARD */}
@@ -207,6 +217,19 @@ const LookingForDriver = (props) => {
                     </div>
 
                 </div>
+
+
+                {/* CANCEL RIDE */}
+                {props.onCancel && (
+                    <button
+                        type="button"
+                        onClick={props.onCancel}
+                        disabled={cancelling}
+                        className="mt-4 w-full rounded-xl border border-red-200 bg-white py-3 font-semibold text-red-600 transition-all hover:bg-red-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {cancelling ? 'Cancelling...' : 'Cancel ride'}
+                    </button>
+                )}
             </>
         )}
 

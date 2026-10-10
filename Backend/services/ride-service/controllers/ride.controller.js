@@ -390,3 +390,147 @@ module.exports.getCaptainStats = async (req, res) => {
         return res.status(500).json({ message: error.message });
     }
 };
+
+
+// ---------------- CURRENT RIDE PAYLOAD ----------------
+async function currentRidePayload(ride, role) {
+    if (!ride) return null;
+
+    const obj = ride.toObject();
+    const userId = getId(obj.user);
+    const captainId = getId(obj.captain);
+
+    const accepted = obj.status === 'accepted';
+    const ongoing = obj.status === 'ongoing';
+
+    const [pickupCoordinates, destinationCoordinates, profile] = await Promise.all([
+        accepted
+            ? mapService.getAddressCoordinates(obj.pickup).catch(() => null)
+            : null,
+        ongoing
+            ? mapService.getAddressCoordinates(obj.destination).catch(() => null)
+            : null,
+        role === 'user'
+            ? (captainId ? fetchCaptain(captainId) : null)
+            : fetchUser(userId)
+    ]);
+
+    if (role === 'user') {
+        // OTP sirf tab jab captain pickup par aa raha hai (ride-accepted jaisa)
+        if (!accepted) delete obj.otp;
+        if (profile) obj.captain = profile;
+    } else {
+        delete obj.otp;                 // captain ko OTP kabhi nahi
+        if (profile) obj.user = profile;
+    }
+
+    return { ...obj, pickupCoordinates, destinationCoordinates };
+}
+
+// ---------------- CURRENT RIDE (user) ----------------
+module.exports.getCurrentRideUser = async (req, res) => {
+    try {
+        const userId = getId(req.user);
+        if (!userId) return res.status(401).json({ message: 'User authentication required' });
+
+        const ride = await rideService.getCurrentRideForUser(userId);
+        return res.status(200).json({ ride: await currentRidePayload(ride, 'user') });
+    } catch (error) {
+        console.error('CURRENT RIDE (USER) ERROR:', error);
+        return res.status(500).json({ message: error.message });
+    }
+};
+
+// ---------------- CURRENT RIDE (captain) ----------------
+module.exports.getCurrentRideCaptain = async (req, res) => {
+    try {
+        const captainId = getId(req.captain);
+        if (!captainId) return res.status(401).json({ message: 'Captain authentication required' });
+
+        const ride = await rideService.getCurrentRideForCaptain(captainId);
+        return res.status(200).json({ ride: await currentRidePayload(ride, 'captain') });
+    } catch (error) {
+        console.error('CURRENT RIDE (CAPTAIN) ERROR:', error);
+        return res.status(500).json({ message: error.message });
+    }
+};
+
+// ---------------- HISTORY (user + captain dono) ----------------
+module.exports.getRideHistory = async (req, res) => {
+    try {
+        const userId = getId(req.user);
+        const captainId = getId(req.captain);
+
+        if (!userId && !captainId) {
+            return res.status(401).json({ message: 'Authentication required' });
+        }
+
+        const page = Math.max(parseInt(req.query.page) || 1, 1);
+        const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+
+        const { rides, total } = await rideService.getRideHistory({
+            userId,
+            captainId,
+            page,
+            limit
+        });
+
+        return res.status(200).json({
+            rides,
+            page,
+            total,
+            hasMore: page * limit < total
+        });
+    } catch (error) {
+        console.error('RIDE HISTORY ERROR:', error);
+        return res.status(500).json({ message: error.message });
+    }
+};
+
+
+// ---------------- CANCEL RIDE (user + captain) ----------------
+module.exports.cancelRide = async (req, res) => {
+    if (validationFailed(req, res)) return;
+
+    try {
+        const userId = getId(req.user);
+        const captainId = getId(req.captain);
+
+        if (!userId && !captainId) {
+            return res.status(401).json({ message: 'Authentication required' });
+        }
+
+        const ride = await rideService.cancelRide({
+            rideId: req.body.rideId,
+            userId,
+            captainId,
+            reason: req.body.reason
+        });
+
+        const payload = {
+            rideId: ride._id,
+            cancelledBy: userId ? 'user' : 'captain'
+        };
+
+        if (userId) {
+            // user ne cancel kiya -> captain ko batao
+            const rideCaptain = getId(ride.captain);
+            if (rideCaptain) {
+                notifyCaptain(rideCaptain, 'ride-cancelled', payload);
+                untrackCaptainRide(rideCaptain);
+            }
+        } else {
+            // captain ne cancel kiya -> user ko batao
+            notifyUser(getId(ride.user), 'ride-cancelled', payload);
+            untrackCaptainRide(captainId);
+        }
+
+        console.log('RIDE CANCELLED:', ride._id, 'by', payload.cancelledBy);
+
+        return res.status(200).json({ success: true, ride: withoutOtp(ride) });
+
+    } catch (error) {
+        console.error('CANCEL RIDE ERROR:', error);
+        return res.status(400).json({ message: error.message });
+    }
+};

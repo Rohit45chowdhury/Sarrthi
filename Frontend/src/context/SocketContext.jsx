@@ -17,7 +17,10 @@ const SocketProvider = ({ children }) => {
         const newSocket = io(
             import.meta.env.VITE_API_URL || 'http://localhost:3000',
             {
-                transports: ['websocket']
+                transports: ['websocket'],
+                reconnection: true,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000
             }
         )
 
@@ -35,6 +38,20 @@ const SocketProvider = ({ children }) => {
             console.error('Socket connection error:', error.message)
         }
 
+        // Phone / browser can freeze the tab in the background and the
+        // reconnect timer may not run. When the app comes back to the
+        // foreground, reconnect right away. Home / CaptainHome re-join their
+        // room on every "connect" event, so events start flowing again.
+        const handleVisibility = () => {
+
+            if (
+                document.visibilityState === 'visible' &&
+                !newSocket.connected
+            ) {
+                newSocket.connect()
+            }
+        }
+
         // DEV ONLY: logs every event the server sends to this browser.
         // If "new-ride" never shows here on the captain's page, the backend
         // is not sending it to this socket (not joined / not in radius).
@@ -46,6 +63,8 @@ const SocketProvider = ({ children }) => {
         newSocket.on('disconnect', handleDisconnect)
         newSocket.on('connect_error', handleError)
 
+        document.addEventListener('visibilitychange', handleVisibility)
+
         if (import.meta.env.DEV) {
             newSocket.onAny(handleAny)
         }
@@ -56,6 +75,8 @@ const SocketProvider = ({ children }) => {
             newSocket.off('disconnect', handleDisconnect)
             newSocket.off('connect_error', handleError)
             newSocket.offAny(handleAny)
+
+            document.removeEventListener('visibilitychange', handleVisibility)
 
             newSocket.disconnect()
         }

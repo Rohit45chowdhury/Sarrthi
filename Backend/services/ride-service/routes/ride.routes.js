@@ -90,6 +90,31 @@ router.post(
     rideController.rateRide
 );
 
+// ================= CURRENT RIDE (restore) =================
+router.get('/active', authMiddleware.authUser, rideController.getCurrentRideUser);
+router.get('/captain/active', authMiddleware.authCaptain, rideController.getCurrentRideCaptain);
+
+// ================= HISTORY =================
+router.get('/history', authMiddleware.authUser, rideController.getRideHistory);
+router.get('/captain/history', authMiddleware.authCaptain, rideController.getRideHistory);
+
+// ================= CANCEL RIDE =================
+router.post(
+    '/cancel',
+    authMiddleware.authUser,
+    body('rideId').isMongoId().withMessage('Invalid ride id'),
+    body('reason').optional({ nullable: true }).isString().isLength({ max: 200 }),
+    rideController.cancelRide
+);
+
+router.post(
+    '/captain/cancel',
+    authMiddleware.authCaptain,
+    body('rideId').isMongoId().withMessage('Invalid ride id'),
+    body('reason').optional({ nullable: true }).isString().isLength({ max: 200 }),
+    rideController.cancelRide
+);
+
 
 // ================= INTERNAL (notification-service only) =================
 // Do NOT expose /rides/internal/* through the gateway.

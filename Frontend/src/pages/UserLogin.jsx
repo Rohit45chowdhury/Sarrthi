@@ -267,14 +267,14 @@ const UserLogin = () => {
                                 />
                             </div>
 
-                            <button
+                            {/* <button
                                 type="button"
                                 disabled={loading}
                                 onClick={() => reset("email")}
                                 className="mt-3 w-full rounded-xl border border-gray-300 bg-white px-5 py-4 text-base font-semibold text-[#12334A] transition duration-300 hover:border-[#12334A] disabled:opacity-60"
                             >
                                 Email me a login code
-                            </button>
+                            </button> */}
 
                             <button
                                 type="button"

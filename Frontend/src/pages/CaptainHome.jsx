@@ -2,7 +2,8 @@ import React, {
     useEffect,
     useRef,
     useState,
-    useContext
+    useContext,
+    useCallback
 } from 'react'
 
 import { Link, useNavigate } from 'react-router-dom'
@@ -14,6 +15,7 @@ import RidePopUp from '../components/RidePopUp'
 import ConfirmRidePopUp from '../components/ConfirmRidePopUp'
 import LiveTracking from '../components/LiveTracking'
 import CaptainStats from '../components/CaptainStats'
+import RideHistory from '../components/RideHistory'
 
 import { CaptainDataContext } from '../context/CapatainContext'
 import { SocketContext } from '../context/SocketContext'
@@ -67,9 +69,13 @@ const CaptainHome = () => {
     // separate loaders so one action does not disable the other
     const [loading, setLoading] = useState(false)
     const [confirming, setConfirming] = useState(false)
+    const [cancelling, setCancelling] = useState(false)
 
     // bottom sheet: compact (map visible) / expanded (more details)
     const [expanded, setExpanded] = useState(false)
+
+    // past rides sheet
+    const [historyOpen, setHistoryOpen] = useState(false)
 
     const locationWatchIdRef = useRef(null)
     const heartbeatRef = useRef(null)
@@ -77,6 +83,9 @@ const CaptainHome = () => {
 
     // time of the last location sent to the server (for the 5 sec throttle)
     const lastSentRef = useRef(0)
+
+    // "<rideId>:<status>" of the last ride we restored -> same state is not applied twice
+    const lastRestoredRef = useRef('')
 
     // lets the socket handler read the latest value without re-subscribing.
     // true while the captain is entering the OTP OR is already tracking an
@@ -95,6 +104,218 @@ const CaptainHome = () => {
             setOnline(captain.status === 'active')
         }
     }, [captain])
+
+    /* ================= RESTORE RUNNING RIDE =================
+        Asks the server for the captain's running ride and puts the screen back
+        into the right state. Works after the app was closed, the phone
+        restarted or the socket missed an event.
+
+        accepted -> live map + "Reached pickup" button (OTP popup if enabled)
+        ongoing  -> /captain-riding page
+    */
+
+    const restoreRide = useCallback(async (initial = false) => {
+
+        try {
+
+            const { data } = await axios.get(
+                `${BASE_URL}/rides/captain/active`,
+                { headers: authHeaders() }
+            )
+
+            const running = data?.ride
+
+            // null -> server confirmed: no running ride
+            if (!running) return null
+
+            const key = `${running._id}:${running.status}`
+
+            if (lastRestoredRef.current === key) return running
+
+            lastRestoredRef.current = key
+
+            if (running.status === 'ongoing') {
+
+                sessionStorage.setItem(
+                    'activeRide',
+                    JSON.stringify(running)
+                )
+
+                navigate('/captain-riding', {
+                    state: { ride: running }
+                })
+
+                return running
+            }
+
+            if (running.status === 'accepted') {
+
+                // keep the passenger profile we already have if the server
+                // could only send the user id this time
+                setRide(prev => {
+
+                    if (prev?._id !== running._id) return running
+
+                    return {
+                        ...prev,
+                        ...running,
+                        user:
+                            running.user && typeof running.user === 'object'
+                                ? running.user
+                                : prev.user
+                    }
+                })
+
+                setRidePopupPanel(false)
+                setShowLiveTracking(true)
+                setExpanded(false)
+
+                // only on first load: never close an OTP popup the captain
+                // is already using
+                if (initial) {
+                    setConfirmRidePopupPanel(OPEN_OTP_AFTER_CONFIRM)
+                }
+            }
+
+            return running
+
+        } catch (error) {
+
+            console.error(
+                'RESTORE RIDE ERROR:',
+                error.response?.data || error.message
+            )
+        }
+
+    }, [navigate])
+
+    // first load
+    useEffect(() => {
+
+        restoreRide(true)
+
+    }, [restoreRide])
+
+    // app comes back to the foreground / socket reconnects
+    useEffect(() => {
+
+        const handleVisible = () => {
+
+            if (document.visibilityState === 'visible') {
+                restoreRide(false)
+            }
+        }
+
+        const handleReconnect = () => restoreRide(false)
+
+        document.addEventListener('visibilitychange', handleVisible)
+        socket?.io?.on('reconnect', handleReconnect)
+
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisible)
+            socket?.io?.off('reconnect', handleReconnect)
+        }
+
+    }, [socket, restoreRide])
+
+    /* ================= CANCEL RIDE ================= */
+
+    // back to the dashboard, forget everything about the old ride
+    const resetRideState = () => {
+
+        setRide(null)
+        setShowLiveTracking(false)
+        setConfirmRidePopupPanel(false)
+        setRidePopupPanel(false)
+        setOtp('')
+
+        lastRestoredRef.current = ''
+    }
+
+    // captain can cancel only before the OTP is verified (status "accepted")
+    const cancelRide = async () => {
+
+        const rideId = ride?._id || ride?.rideId
+
+        if (!rideId) {
+            resetRideState()
+            return
+        }
+
+        if (cancelling) return
+
+        if (!window.confirm('Cancel this ride?')) return
+
+        setCancelling(true)
+
+        try {
+
+            await axios.post(
+                `${BASE_URL}/rides/captain/cancel`,
+                { rideId },
+                { headers: authHeaders() }
+            )
+
+            resetRideState()
+
+        } catch (error) {
+
+            console.error(
+                'CANCEL RIDE ERROR:',
+                error.response?.data || error.message
+            )
+
+            // Ask the server what really happened:
+            // null    -> ride is already cancelled (e.g. by the passenger) -> reset
+            // ongoing -> ride already started -> screen moves to the riding page
+            const active = await restoreRide(false)
+
+            if (active === null) {
+                resetRideState()
+                return
+            }
+
+            alert(
+                error.response?.data?.message ||
+                'Unable to cancel the ride.'
+            )
+
+        } finally {
+
+            setCancelling(false)
+        }
+    }
+
+    // the passenger cancelled the ride
+    useEffect(() => {
+
+        if (!socket) return
+
+        const handleCancelled = data => {
+
+            const currentId = ride?._id || ride?.rideId
+
+            if (
+                data?.rideId &&
+                currentId &&
+                String(data.rideId) !== String(currentId)
+            ) {
+                return
+            }
+
+            resetRideState()
+
+            alert('The passenger cancelled the ride.')
+        }
+
+        socket.on('ride-cancelled', handleCancelled)
+
+        return () => {
+            socket.off('ride-cancelled', handleCancelled)
+        }
+
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [socket, ride?._id, ride?.rideId])
 
     /* ================= LOCATION TRACKING ================= */
 
@@ -519,6 +740,11 @@ const CaptainHome = () => {
     const passengerName =
         ride?.user?.fullname?.firstname || 'Passenger'
 
+    const roundButton =
+        'pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full ' +
+        'bg-white text-[#12334A] shadow-lg transition-all duration-200 ' +
+        'hover:bg-[#F15A24] hover:text-white active:scale-95 sm:h-12 sm:w-12'
+
     return (
 
     <div className="relative h-[100dvh] w-full overflow-hidden bg-gray-100">
@@ -548,22 +774,7 @@ const CaptainHome = () => {
         {/* =========================================================
             TOP BAR
         ========================================================== */}
-        <div
-            className="
-                pointer-events-none
-                absolute
-                inset-x-0
-                top-0
-                z-30
-                flex
-                items-start
-                justify-between
-                px-5
-                pt-[max(1rem,env(safe-area-inset-top))]
-                sm:px-8
-                sm:pt-[max(1.5rem,env(safe-area-inset-top))]
-            "
-        >
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between px-5 pt-[max(1rem,env(safe-area-inset-top))] sm:px-8 sm:pt-[max(1.5rem,env(safe-area-inset-top))]">
 
             {/* LOGO */}
             <div className="pointer-events-auto flex items-center gap-2">
@@ -574,16 +785,7 @@ const CaptainHome = () => {
                     className="h-9 w-9 object-contain sm:h-10 sm:w-10"
                 />
 
-                <h1
-                    className="
-                        text-2xl
-                        font-extrabold
-                        leading-none
-                        tracking-tight
-                        text-[#12334A]
-                        sm:text-3xl
-                    "
-                >
+                <h1 className="text-2xl font-extrabold leading-none tracking-tight text-[#12334A] sm:text-3xl">
                     Saarthi
                     <span className="text-[#F15A24]">.</span>
                 </h1>
@@ -591,32 +793,27 @@ const CaptainHome = () => {
             </div>
 
 
-            {/* LOGOUT */}
-            <Link
-                to="/captain/logout"
-                aria-label="Logout"
-                className="
-                    pointer-events-auto
-                    flex
-                    h-11
-                    w-11
-                    items-center
-                    justify-center
-                    rounded-full
-                    bg-white
-                    text-[#12334A]
-                    shadow-lg
-                    transition-all
-                    duration-200
-                    hover:bg-[#F15A24]
-                    hover:text-white
-                    active:scale-95
-                    sm:h-12
-                    sm:w-12
-                "
-            >
-                <i className="text-xl ri-logout-box-r-line"></i>
-            </Link>
+            {/* PAST RIDES + LOGOUT */}
+            <div className="flex items-center gap-3">
+
+                <button
+                    type="button"
+                    onClick={() => setHistoryOpen(true)}
+                    aria-label="Past rides"
+                    className={roundButton}
+                >
+                    <i className="text-xl ri-history-line"></i>
+                </button>
+
+                <Link
+                    to="/captain/logout"
+                    aria-label="Logout"
+                    className={roundButton}
+                >
+                    <i className="text-xl ri-logout-box-r-line"></i>
+                </Link>
+
+            </div>
 
         </div>
 
@@ -657,57 +854,14 @@ const CaptainHome = () => {
                             : 'Show full dashboard'
                     }
                     aria-expanded={expanded}
-                    className="
-                        group
-                        relative
-                        flex
-                        w-full
-                        shrink-0
-                        items-center
-                        justify-center
-                        pb-2
-                        pt-2
-                        active:scale-95
-                    "
+                    className="group relative flex w-full shrink-0 items-center justify-center pb-2 pt-2 active:scale-95"
                 >
 
                     {/* HANDLE */}
-                    <span
-                        className="
-                            absolute
-                            top-2
-                            h-1
-                            w-12
-                            rounded-full
-                            bg-gray-300
-                            transition-colors
-                            duration-200
-                            group-hover:bg-[#F15A24]/50
-                        "
-                    />
+                    <span className="absolute top-2 h-1 w-12 rounded-full bg-gray-300 transition-colors duration-200 group-hover:bg-[#F15A24]/50" />
 
                     {/* ARROW */}
-                    <span
-                        className="
-                            mt-2
-                            flex
-                            h-9
-                            w-9
-                            items-center
-                            justify-center
-                            rounded-full
-                            border
-                            border-gray-200
-                            bg-white
-                            text-[#12334A]
-                            shadow-md
-                            transition-all
-                            duration-300
-                            group-hover:border-[#F15A24]/40
-                            group-hover:text-[#F15A24]
-                            group-active:scale-90
-                        "
-                    >
+                    <span className="mt-2 flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white text-[#12334A] shadow-md transition-all duration-300 group-hover:border-[#F15A24]/40 group-hover:text-[#F15A24] group-active:scale-90">
 
                         <i
                             className={`
@@ -730,41 +884,16 @@ const CaptainHome = () => {
                 {/* =================================================
                     DASHBOARD CONTENT
                 ================================================== */}
-                <div
-                    className="
-                        min-h-0
-                        flex-1
-                        overflow-y-auto
-                        overscroll-contain
-                        px-5
-                        pb-[max(1.25rem,env(safe-area-inset-bottom))]
-                        pt-2
-                        sm:px-8
-                    "
-                >
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-2 sm:px-8">
 
                     {/* =================================================
                         HEADING
                     ================================================== */}
                     <div className="mb-4 flex items-center gap-3">
 
-                        <span
-                            className="
-                                h-7
-                                w-2
-                                rounded-full
-                                bg-[#F15A24]
-                            "
-                        />
+                        <span className="h-7 w-2 rounded-full bg-[#F15A24]" />
 
-                        <h2
-                            className="
-                                text-2xl
-                                font-extrabold
-                                text-[#12334A]
-                                sm:text-3xl
-                            "
-                        >
+                        <h2 className="text-2xl font-extrabold text-[#12334A] sm:text-3xl">
                             Captain dashboard
                         </h2>
 
@@ -776,58 +905,21 @@ const CaptainHome = () => {
                     ================================================== */}
                     {showLiveTracking && ride && (
 
-                        <div
-                            className="
-                                mb-3
-                                rounded-xl
-                                bg-[#F15A24]/10
-                                p-4
-                                ring-1
-                                ring-[#F15A24]/30
-                            "
-                        >
+                        <div className="mb-3 rounded-xl bg-[#F15A24]/10 p-4 ring-1 ring-[#F15A24]/30">
 
-                            <div
-                                className="
-                                    flex
-                                    items-start
-                                    justify-between
-                                    gap-3
-                                "
-                            >
+                            <div className="flex items-start justify-between gap-3">
 
                                 <div className="min-w-0">
 
-                                    <p
-                                        className="
-                                            text-xs
-                                            font-semibold
-                                            uppercase
-                                            tracking-wide
-                                            text-[#F15A24]
-                                        "
-                                    >
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-[#F15A24]">
                                         Ride accepted
                                     </p>
 
-                                    <h3
-                                        className="
-                                            truncate
-                                            font-semibold
-                                            text-[#12334A]
-                                        "
-                                    >
+                                    <h3 className="truncate font-semibold text-[#12334A]">
                                         {passengerName}
                                     </h3>
 
-                                    <p
-                                        className="
-                                            mt-0.5
-                                            line-clamp-2
-                                            text-xs
-                                            text-gray-600
-                                        "
-                                    >
+                                    <p className="mt-0.5 line-clamp-2 text-xs text-gray-600">
                                         {ride.pickup}
                                     </p>
 
@@ -842,23 +934,20 @@ const CaptainHome = () => {
                                 onClick={() =>
                                     setConfirmRidePopupPanel(true)
                                 }
-                                className="
-                                    mt-3
-                                    w-full
-                                    rounded-xl
-                                    bg-[#12334A]
-                                    py-3
-                                    font-semibold
-                                    text-white
-                                    shadow-md
-                                    shadow-[#12334A]/15
-                                    transition-all
-                                    duration-300
-                                    hover:bg-[#F15A24]
-                                    active:scale-[0.98]
-                                "
+                                className="mt-3 w-full rounded-xl bg-[#12334A] py-3 font-semibold text-white shadow-md shadow-[#12334A]/15 transition-all duration-300 hover:bg-[#F15A24] active:scale-[0.98]"
                             >
                                 Reached pickup · Enter OTP
+                            </button>
+
+
+                            {/* CANCEL BUTTON */}
+                            <button
+                                type="button"
+                                onClick={cancelRide}
+                                disabled={cancelling}
+                                className="mt-2 w-full rounded-xl border border-red-200 bg-white py-3 font-semibold text-red-600 transition-all hover:bg-red-50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {cancelling ? 'Cancelling...' : 'Cancel ride'}
                             </button>
 
                         </div>
@@ -869,14 +958,7 @@ const CaptainHome = () => {
                     {/* =================================================
                         MAIN DASHBOARD GRID
                     ================================================== */}
-                    <div
-                        className="
-                            grid
-                            gap-3
-                            md:grid-cols-2
-                            lg:grid-cols-3
-                        "
-                    >
+                    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
 
                         {/* =================================================
                             ONLINE / OFFLINE
@@ -900,14 +982,7 @@ const CaptainHome = () => {
                             `}
                         >
 
-                            <div
-                                className="
-                                    flex
-                                    min-w-0
-                                    items-center
-                                    gap-3
-                                "
-                            >
+                            <div className="flex min-w-0 items-center gap-3">
 
                                 {/* ICON */}
                                 <div
@@ -933,13 +1008,7 @@ const CaptainHome = () => {
                                 {/* TEXT */}
                                 <div className="min-w-0">
 
-                                    <h3
-                                        className="
-                                            truncate
-                                            font-semibold
-                                            text-[#12334A]
-                                        "
-                                    >
+                                    <h3 className="truncate font-semibold text-[#12334A]">
                                         {loading
                                             ? 'Updating status...'
                                             : online
@@ -947,13 +1016,7 @@ const CaptainHome = () => {
                                                 : 'You are offline'}
                                     </h3>
 
-                                    <p
-                                        className="
-                                            truncate
-                                            text-xs
-                                            text-gray-500
-                                        "
-                                    >
+                                    <p className="truncate text-xs text-gray-500">
                                         {online
                                             ? 'Waiting for ride requests nearby'
                                             : 'Go online to start receiving rides'}
@@ -1080,28 +1143,9 @@ const CaptainHome = () => {
             `}
         >
 
-            <span
-                className="
-                    mx-auto
-                    mt-3
-                    h-1
-                    w-12
-                    shrink-0
-                    rounded-full
-                    bg-gray-300
-                "
-            />
+            <span className="mx-auto mt-3 h-1 w-12 shrink-0 rounded-full bg-gray-300" />
 
-            <div
-                className="
-                    overflow-y-auto
-                    overscroll-contain
-                    px-5
-                    pb-[max(1.25rem,env(safe-area-inset-bottom))]
-                    pt-4
-                    sm:px-8
-                "
-            >
+            <div className="overflow-y-auto overscroll-contain px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 sm:px-8">
 
                 <RidePopUp
                     ride={ride}
@@ -1130,28 +1174,9 @@ const CaptainHome = () => {
             `}
         >
 
-            <span
-                className="
-                    mx-auto
-                    mt-3
-                    h-1
-                    w-12
-                    shrink-0
-                    rounded-full
-                    bg-gray-300
-                "
-            />
+            <span className="mx-auto mt-3 h-1 w-12 shrink-0 rounded-full bg-gray-300" />
 
-            <div
-                className="
-                    overflow-y-auto
-                    overscroll-contain
-                    px-5
-                    pb-[max(1.25rem,env(safe-area-inset-bottom))]
-                    pt-4
-                    sm:px-8
-                "
-            >
+            <div className="overflow-y-auto overscroll-contain px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 sm:px-8">
 
                 <ConfirmRidePopUp
                     ride={ride}
@@ -1170,6 +1195,17 @@ const CaptainHome = () => {
             </div>
 
         </div>
+
+
+        {/* =========================================================
+            PAST RIDES SHEET
+        ========================================================== */}
+        {historyOpen && (
+            <RideHistory
+                role="captain"
+                onClose={() => setHistoryOpen(false)}
+            />
+        )}
 
     </div>
 
