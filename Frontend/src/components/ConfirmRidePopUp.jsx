@@ -1,5 +1,30 @@
-
 import React from 'react'
+
+// Backend ride.distance meter mein bhejta hai (maps API ki tarah).
+// Agar tumhara backend km mein bhejta hai to ise false kar do.
+const DISTANCE_IN_METERS = true
+
+// 51382.4 -> "51.4 km", 800 -> "800 m", 12.4 (km) -> "12.4 km"
+const formatDistance = (raw) => {
+    const value = Number(raw)
+
+    if (!Number.isFinite(value) || value <= 0) return '—'
+
+    const km = DISTANCE_IN_METERS ? value / 1000 : value
+
+    if (km < 1) return `${Math.round(km * 1000)} m`
+
+    return `${km.toFixed(1)} km`
+}
+
+// 245.6789 -> "245.68", 250 -> "250"
+const formatFare = (raw) => {
+    const value = Number(raw)
+
+    if (!Number.isFinite(value)) return '0'
+
+    return Number.isInteger(value) ? String(value) : value.toFixed(2)
+}
 
 const ConfirmRidePopUp = ({
     ride,
@@ -110,7 +135,7 @@ const ConfirmRidePopUp = ({
                     <div className="mt-2 flex items-center gap-2">
                         <div className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-medium">
                             <i className="ri-route-line text-[#F15A24]"></i>
-                            {ride?.distance ? `${ride.distance} km` : '—'}
+                            {formatDistance(ride?.distance)}
                         </div>
                         <div className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-medium">
                             <i className="ri-money-rupee-circle-line text-[#F15A24]"></i>
@@ -122,7 +147,7 @@ const ConfirmRidePopUp = ({
                 <div className="shrink-0 text-right">
                     <p className="text-xs text-white/70">Fare</p>
                     <h3 className="text-2xl font-extrabold">
-                        ₹{ride?.fare ?? 0}
+                        ₹{formatFare(ride?.fare)}
                     </h3>
                 </div>
 
@@ -274,4 +299,3 @@ const ConfirmRidePopUp = ({
 }
 
 export default ConfirmRidePopUp
-

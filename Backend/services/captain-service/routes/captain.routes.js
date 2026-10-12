@@ -5,7 +5,17 @@ const { body, param } = require('express-validator');
 const captainController = require('../controllers/captain.controller');
 const { authCaptain } = require('../middlewares/auth.middleware');
 const internalOnly = require('../middlewares/internal.middleware');
-const {captainLoginRateLimiter} = require('../middlewares/rateLimit.middleware');
+const { captainLoginRateLimiter } = require('../middlewares/rateLimit.middleware');
+
+
+// ---- Verification rules (captain.model.js aur CaptainSignup.jsx jaise hi rakho) ----
+const PLATE_REGEX = /^([A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4}|[0-9]{2}BH[0-9]{4}[A-Z]{1,2})$/;
+const LICENSE_REGEX = /^[A-Z]{2}[0-9]{2}(19|20)[0-9]{2}[0-9]{7}$/;
+const CAPACITY_LIMITS = { motorcycle: 1, auto: 3, car: 8 };
+
+// "br 01-ab 1234" -> "BR01AB1234"
+const normalize = (v) =>
+    typeof v === 'string' ? v.toUpperCase().replace(/[\s-]/g, '') : v;
 
 
 // ============================================================
@@ -15,13 +25,55 @@ const {captainLoginRateLimiter} = require('../middlewares/rateLimit.middleware')
 router.post(
     '/register',
     [
-        body('email').isEmail().withMessage('Invalid Email'),
-        body('fullname.firstname').isLength({ min: 3 }).withMessage('First name must be at least 3 characters long'),
-        body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
-        body('vehicle.color').isLength({ min: 3 }).withMessage('Color must be at least 3 characters long'),
-        body('vehicle.plate').isLength({ min: 3 }).withMessage('Plate must be at least 3 characters long'),
-        body('vehicle.capacity').isInt({ min: 1 }).withMessage('Capacity must be at least 1'),
-        body('vehicle.vehicleType').isIn(['car', 'motorcycle', 'auto']).withMessage('Invalid vehicle type')
+        body('email')
+            .trim()
+            .isEmail().withMessage('Invalid Email')
+            .normalizeEmail({ gmail_remove_dots: false }),
+
+        body('fullname.firstname')
+            .trim()
+            .isLength({ min: 3 }).withMessage('First name must be at least 3 characters long'),
+
+        body('fullname.lastname')
+            .optional({ checkFalsy: true })
+            .trim()
+            .isLength({ min: 3 }).withMessage('Last name must be at least 3 characters long'),
+
+        body('password')
+            .isLength({ min: 8 }).withMessage('Password must be at least 8 characters long'),
+
+        body('licenseNumber')
+            .optional({ checkFalsy: true })
+            .customSanitizer(normalize)
+            .matches(LICENSE_REGEX).withMessage('Invalid driving license number'),
+
+        body('vehicle.color')
+            .trim()
+            .isLength({ min: 3 }).withMessage('Color must be at least 3 characters long'),
+
+        body('vehicle.model')
+            .trim()
+            .isLength({ min: 2, max: 40 }).withMessage('Vehicle model must be 2-40 characters long'),
+
+        body('vehicle.plate')
+            .customSanitizer(normalize)
+            .matches(PLATE_REGEX).withMessage('Invalid vehicle number (example: BR01AB1234)'),
+
+        body('vehicle.vehicleType')
+            .isIn(['car', 'motorcycle', 'auto']).withMessage('Invalid vehicle type'),
+
+        body('vehicle.capacity')
+            .isInt({ min: 1 }).withMessage('Capacity must be at least 1')
+            .bail()
+            .custom((value, { req }) => {
+                const limit = CAPACITY_LIMITS[req.body?.vehicle?.vehicleType];
+                if (limit && Number(value) > limit) {
+                    throw new Error(
+                        `A ${req.body.vehicle.vehicleType} can carry at most ${limit} passenger(s)`
+                    );
+                }
+                return true;
+            })
     ],
     captainController.registerCaptain
 );

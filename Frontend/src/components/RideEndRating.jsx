@@ -1,5 +1,4 @@
 import React, { useContext, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 
 import { SocketContext } from '../context/SocketContext'
@@ -12,12 +11,14 @@ const BASE_URL =
 
 const DISMISSED_KEY = 'ratingDismissedRide'
 
+// App.jsx ke <Route path="..."> se exact match karo
+const HOME_ROUTE = '/home'
+
 const RideEndRating = () => {
 
     const { socket } = useContext(SocketContext)
     const userCtx = useContext(UserDataContext)
     const user = userCtx?.user
-    const navigate = useNavigate()
 
     const [endedRide, setEndedRide] = useState(null)
 
@@ -114,16 +115,26 @@ const RideEndRating = () => {
 
     }, [socket, user?._id])
 
+    // Rating submit ya skip, dono ke baad yahi chalta hai.
+    // Full reload ke saath home par jao: ye refresh jaisa hai, isse purani
+    // ride state saaf ho jaati hai aur Home fresh render hota hai.
+    const handleClose = () => {
+
+        if (endedRide?._id) {
+            localStorage.setItem(DISMISSED_KEY, endedRide._id)
+        }
+
+        setEndedRide(null)
+
+        window.location.replace(HOME_ROUTE)
+    }
+
     if (!endedRide) return null
 
     return (
         <RatingPopUp
             ride={endedRide}
-            onClose={() => {
-                localStorage.setItem(DISMISSED_KEY, endedRide._id)
-                setEndedRide(null)
-                navigate('/home')   // change if your user home route is different
-            }}
+            onClose={handleClose}
         />
     )
 }

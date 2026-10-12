@@ -10,6 +10,10 @@ const RIDE_SERVICE_URL = process.env.RIDE_SERVICE_URL || 'http://127.0.0.1:3003'
 
 const VEHICLE_TYPES = ['car', 'motorcycle', 'auto'];
 
+// In statuses wale captains online nahi ja sakte aur ride popup nahi paate.
+// Purane captains (jinke document mein verification field nahi hai) block nahi hote.
+const BLOCKED_VERIFICATION = ['pending', 'rejected'];
+
 
 // ---------------- HELPERS ----------------
 
@@ -34,22 +38,64 @@ function normalizeVehicleType(type) {
     return map[String(type || '').toLowerCase().trim()];
 }
 
+// Duplicate key error (11000) se pata karo kaunsa field duplicate hai
+function duplicateMessage(error) {
+    const key = Object.keys(error.keyPattern || error.keyValue || {})[0] || '';
+
+    if (key.includes('plate')) return 'Vehicle number already registered';
+    if (key.includes('licenseNumber')) return 'Driving license already registered';
+    if (key.includes('email')) return 'Email already registered';
+
+    return 'Captain already registered';
+}
+
+// Mongoose ValidationError ko express-validator jaise format mein badlo,
+// taaki frontend ek hi tarah se errors padh sake
+function mongooseErrors(error) {
+    return Object.values(error.errors || {}).map((e) => ({
+        msg: e.message,
+        path: e.path
+    }));
+}
+
 
 // ============================================================
 // REGISTER CAPTAIN   POST /captains/register
+//
+// Auto verification:
+//   1. routes: format checks (plate, license, model, capacity, password...)
+//   2. yahan: duplicate checks (email, plate, license)
+//   3. model: final validation
+// Teeno pass -> captain DB mein save (accepted)
+// Koi fail   -> 400 / 409, DB mein kuch save nahi (rejected)
 // ============================================================
 module.exports.registerCaptain = async (req, res) => {
 
     try {
         if (validationFailed(req, res)) return;
 
-        const { fullname, password, vehicle } = req.body;
+        const { fullname, password, vehicle, licenseNumber } = req.body;
         const email = String(req.body.email).toLowerCase().trim();
 
-        const exists = await captainModel.findOne({ email });
+        // Duplicate checks (email / vehicle number / license)
+        const orConditions = [
+            { email },
+            { 'vehicle.plate': vehicle.plate }
+        ];
+        if (licenseNumber) orConditions.push({ licenseNumber });
+
+        const exists = await captainModel
+            .findOne({ $or: orConditions })
+            .select('email vehicle.plate licenseNumber');
 
         if (exists) {
-            return res.status(400).json({ message: 'Captain already exist' });
+            let message = 'Captain already registered';
+
+            if (exists.email === email) message = 'Email already registered';
+            else if (exists.vehicle?.plate === vehicle.plate) message = 'Vehicle number already registered';
+            else if (licenseNumber && exists.licenseNumber === licenseNumber) message = 'Driving license already registered';
+
+            return res.status(409).json({ status: 'rejected', message });
         }
 
         const hashedPassword = await captainModel.hashPassword(password);
@@ -59,7 +105,9 @@ module.exports.registerCaptain = async (req, res) => {
             lastname: fullname.lastname,
             email,
             password: hashedPassword,
+            licenseNumber,
             color: vehicle.color,
+            model: vehicle.model,
             plate: vehicle.plate,
             capacity: vehicle.capacity,
             vehicleType: vehicle.vehicleType
@@ -67,12 +115,26 @@ module.exports.registerCaptain = async (req, res) => {
 
         const token = captain.generateAuthToken();
 
-        return res.status(201).json({ token, captain: publicCaptain(captain) });
+        return res.status(201).json({
+            status: 'accepted',
+            token,
+            captain: publicCaptain(captain)
+        });
 
     } catch (error) {
-        // two simultaneous registrations with the same email
+        // do simultaneous registrations (same email / plate / license)
         if (error.code === 11000) {
-            return res.status(400).json({ message: 'Captain already exist' });
+            return res.status(409).json({ status: 'rejected', message: duplicateMessage(error) });
+        }
+
+        // model ki validation fail hui
+        if (error.name === 'ValidationError') {
+            const errors = mongooseErrors(error);
+            return res.status(400).json({
+                status: 'rejected',
+                message: errors[0]?.msg || 'Validation failed',
+                errors
+            });
         }
 
         console.error('Register captain error:', error);
@@ -201,7 +263,14 @@ async function setStatus(captainId, status, res) {
 
 module.exports.updateCaptainStatus = async (req, res) => {
     try {
-        return await setStatus(req.captain._id, req.body?.status, res);
+        const status = req.body?.status;
+
+        // Verified na ho to online nahi ja sakta (offline hamesha ja sakta hai)
+        if (status === 'active' && BLOCKED_VERIFICATION.includes(req.captain.verification?.status)) {
+            return res.status(403).json({ message: 'Your account is not verified yet' });
+        }
+
+        return await setStatus(req.captain._id, status, res);
     } catch (error) {
         console.error('Update status error:', error);
         return res.status(500).json({ message: 'Server error' });
@@ -266,13 +335,15 @@ module.exports.logoutCaptain = async (req, res) => {
 
 // GET /captains/active?vehicleType=car
 // Online captains that have a saved location (ride-service filters by distance).
+// Sirf verified captains (pending / rejected ko ride popup nahi aata).
 module.exports.getActiveCaptains = async (req, res) => {
 
     try {
         const query = {
             status: 'active',
             'location.ltd': { $exists: true, $ne: null },
-            'location.lng': { $exists: true, $ne: null }
+            'location.lng': { $exists: true, $ne: null },
+            'verification.status': { $nin: BLOCKED_VERIFICATION }
         };
 
         if (req.query.vehicleType) {
