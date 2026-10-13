@@ -240,7 +240,12 @@ module.exports.getAutoCompleteSuggestions = async (input) => {
         throw new GeoError('Query is required', 400);
     }
 
-    const listKey = `sug:${hash(input.trim().toLowerCase())}`;
+    const query = input.trim();
+
+    // Too short to be useful, don't waste a Nominatim slot
+    if (query.length < 3) return [];
+
+    const listKey = `sug:${hash(query.toLowerCase())}`;
 
     const cachedList = await cacheGet(listKey);
 
@@ -251,7 +256,7 @@ module.exports.getAutoCompleteSuggestions = async (input) => {
 
         const { data } = await axios.get(`${NOMINATIM}/search`, {
             params: {
-                q: input.trim(),
+                q: query,
                 format: 'json',
                 addressdetails: 1,
                 limit: 5,
@@ -262,55 +267,66 @@ module.exports.getAutoCompleteSuggestions = async (input) => {
         });
 
         const suggestions = [];
-        const pipe = redis.pipeline();
+        const coordEntries = [];
 
         for (const place of data || []) {
             const lat = Number(place.lat);
             const lng = Number(place.lon);
 
-            // Remember the coordinates of every suggestion. When the user
-            // picks one, ride creation finds the pickup in the cache and does
-            // not need another Nominatim request.
+            // Har suggestion ke coordinates cache me rakho, taaki user jab ise chune
+            // to ride creation ko dobara Nominatim call na karni pade
             if (
                 place.display_name &&
                 Number.isFinite(lat) &&
                 Number.isFinite(lng)
             ) {
-                pipe.set(
+                coordEntries.push([
                     PREFIX + geoKey(place.display_name),
-                    JSON.stringify({ lat, ltd: lat, lng }),
-                    'EX',
-                    GEO_TTL
-                );
+                    JSON.stringify({ lat, ltd: lat, lng })
+                ]);
+
+                suggestions.push({
+                    description: place.display_name,
+                    address: place.display_name,
+                    lat,
+                    ltd: lat,
+                    lng
+                });
             }
-
-            suggestions.push({
-                description: place.display_name,
-                address: place.display_name,
-                lat,
-                ltd: lat,
-                lng
-            });
         }
 
-        // one round trip for all coordinate entries; failure is harmless
-        try {
-            await pipe.exec();
-        } catch {
-            /* ignore */
+        // ek round trip me sab save; fail ho to koi dikkat nahi
+        if (coordEntries.length) {
+            try {
+                const pipe = redis.pipeline();
+                for (const [k, v] of coordEntries) {
+                    pipe.set(k, v, 'EX', GEO_TTL);
+                }
+                await pipe.exec();
+            } catch {
+                /* ignore */
+            }
         }
 
+        // Cache the list itself (only when non-empty, so a transient
+        // empty result isn't stuck for 10 minutes)
         if (suggestions.length) {
             await cacheSet(listKey, suggestions, SUGGEST_TTL);
         }
 
         return suggestions;
     } catch (error) {
+        // Queue is full
         if (error instanceof GeoError) throw error;
 
-        console.error('Suggestion Error:', error.response?.data || error.message);
+        const status = error.response?.status;
 
-        throw new GeoError('Unable to get suggestions', 502);
+        console.error('Autocomplete error for input:', query, status || error.message);
+
+        if (status === 429 || status === 403) {
+            throw new GeoError('Location service is rate limited, try again shortly', 503);
+        }
+
+        throw new GeoError('Unable to fetch suggestions', 502);
     }
 };
-
