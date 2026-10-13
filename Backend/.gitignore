@@ -87,3 +87,11 @@ debug/
 
 .nyc_output/
 *.tgz
+
+# Credentials files
+client_secret*.json
+*serviceAccount*.json
+*-credentials.json
+
+# Uploads
+uploads/

@@ -22,24 +22,3 @@ module.exports.createUser = async ({ firstname, lastname, email, password }) => 
         lastLoginAt: new Date()
     });
 };
-
-// Email OTP verify hone ke baad: user mile to login, na mile to banao (atomic upsert)
-module.exports.findOrCreateByEmail = async (email) => {
-    const run = () =>
-        userModel.findOneAndUpdate(
-            { email },
-            {
-                $set: { lastLoginAt: new Date() },
-                $addToSet: { providers: 'email' },
-                $setOnInsert: { fullname: splitName('', email) }
-            },
-            { upsert: true, new: true }
-        );
-
-    try {
-        return await run();
-    } catch (err) {
-        if (err.code === 11000) return run(); // do requests ek saath aayi
-        throw err;
-    }
-};

@@ -10,12 +10,12 @@ const userSchema = new mongoose.Schema(
         },
         email: { type: String, required: true, unique: true, lowercase: true, trim: true },
 
-        // Google / OTP se aaye users ka password nahi hota, isliye required nahi hai
+        // Google se aaye users ka password nahi hota, isliye required nahi hai
         password: { type: String, select: false },
 
         googleId: { type: String, unique: true, sparse: true },
         avatar: { type: String, default: '' },
-        providers: { type: [String], default: [] }, // 'password', 'email', 'google'
+        providers: { type: [String], default: [] }, // 'password', 'google'
         lastLoginAt: Date
 
         // NOTE: tere purane model me aur fields hon (jaise socketId) to unhe yahan wapas add kar de
@@ -28,7 +28,7 @@ userSchema.statics.hashPassword = function (password) {
 };
 
 userSchema.methods.comparePassword = async function (password) {
-    if (!this.password) return false; // password-less account (Google / OTP)
+    if (!this.password) return false; // password-less account (Google)
     return bcrypt.compare(password, this.password);
 };
 
