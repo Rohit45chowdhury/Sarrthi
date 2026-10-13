@@ -1,27 +1,59 @@
+
 const { Kafka, logLevel } = require('kafkajs');
+const mongoose = require('mongoose');
 const captainModel = require('../models/captain.model');
 
-const TOPIC = process.env.KAFKA_LOCATION_TOPIC || 'captain-location';
-const PARTITIONS = Number(process.env.KAFKA_PARTITIONS) || 2;
+const TOPIC = process.env.KAFKA_LOCATION_TOPIC || 'captain-service';
 
-// KAFKA_BROKER (Aiven) pehle, warna KAFKA_BROKERS, warna local
-const brokers = (process.env.KAFKA_BROKER || process.env.KAFKA_BROKERS || 'localhost:29092')
+const brokers = (
+    process.env.KAFKA_BROKER ||
+    process.env.KAFKA_BROKERS ||
+    'localhost:29092'
+)
     .split(',')
-    .map((b) => b.trim())
+    .map((broker) => broker.trim())
     .filter(Boolean);
 
-// Local Kafka: bina SSL / SASL. Aiven: dono chahiye (env se aate hain)
-const ssl = process.env.KAFKA_CA
-    ? { ca: [process.env.KAFKA_CA.replace(/\\n/g, '\n')] }
-    : false;
+if (brokers.length === 0) {
+    throw new Error('Kafka broker configuration is missing');
+}
 
-const sasl = process.env.KAFKA_USERNAME
-    ? {
+// Aiven Kafka: TLS + SASL.
+// Local Kafka: no TLS/SASL unless configured through environment variables.
+const isAiven = brokers.some((broker) =>
+    broker.includes('aivencloud.com')
+);
+
+let ssl = false;
+
+if (process.env.KAFKA_CA) {
+    const ca = process.env.KAFKA_CA.replace(/\\n/g, '\n');
+
+    ssl = {
+        rejectUnauthorized: true,
+        ca: [ca]
+    };
+} else if (isAiven) {
+    ssl = {
+        rejectUnauthorized: true
+    };
+}
+
+let sasl;
+
+if (process.env.KAFKA_USERNAME) {
+    if (!process.env.KAFKA_PASSWORD) {
+        throw new Error(
+            'KAFKA_PASSWORD is required when KAFKA_USERNAME is configured'
+        );
+    }
+
+    sasl = {
         mechanism: process.env.KAFKA_SASL_MECHANISM || 'scram-sha-256',
         username: process.env.KAFKA_USERNAME,
         password: process.env.KAFKA_PASSWORD
-    }
-    : undefined;
+    };
+}
 
 const kafka = new Kafka({
     clientId: 'saarthi-captain-service',
@@ -32,119 +64,244 @@ const kafka = new Kafka({
     connectionTimeout: 10000,
     authenticationTimeout: 10000,
     requestTimeout: 30000,
-    retry: { initialRetryTime: 500, retries: 8 }
+    retry: {
+        initialRetryTime: 500,
+        retries: 8
+    }
 });
 
 const producer = kafka.producer();
+
 const consumer = kafka.consumer({
     groupId: 'captain-location-group',
-    minBytes: 2048,         // thoda data jama hone do...
-    maxWaitTimeInMs: 2000   // ...par 2 sec se zyada wait nahi
+    minBytes: 1,
+    maxWaitTimeInMs: 1000
 });
 
 let producerReady = false;
-
+let consumerStarted = false;
+let initPromise = null;
+let shutdownPromise = null;
 
 // ---------------- PRODUCER ----------------
-// true  = Kafka mein chala gaya
-// false = Kafka ready nahi / fail (controller direct DB write karega)
+
 async function publishLocation({ captainId, ltd, lng }) {
-    if (!producerReady) return false;
+    if (!producerReady) {
+        return false;
+    }
+
+    if (
+        !captainId ||
+        !Number.isFinite(Number(ltd)) ||
+        !Number.isFinite(Number(lng))
+    ) {
+        console.warn('Invalid captain location; Kafka publish skipped');
+        return false;
+    }
 
     try {
         await producer.send({
             topic: TOPIC,
-            messages: [{
-                key: String(captainId), // same captain -> same partition -> order safe
-                value: JSON.stringify({ captainId: String(captainId), ltd, lng, ts: Date.now() })
-            }]
+            acks: -1,
+            messages: [
+                {
+                    key: String(captainId),
+                    value: JSON.stringify({
+                        captainId: String(captainId),
+                        ltd: Number(ltd),
+                        lng: Number(lng),
+                        ts: Date.now()
+                    })
+                }
+            ]
         });
+
         return true;
     } catch (error) {
-        console.error('Kafka publish failed:', error.message);
+        console.error('Kafka location publish failed:', error.message);
         return false;
     }
 }
 
+// ---------------- CONSUMER ----------------
 
-// ---------------- CONSUMER (BULK WRITE) ----------------
+function buildCaptainFilter(captainId) {
+    // Convert valid MongoDB ObjectId strings to ObjectIds.
+    // Keep other ID formats as strings.
+    if (mongoose.Types.ObjectId.isValid(captainId)) {
+        const objectId = new mongoose.Types.ObjectId(captainId);
+
+        // Avoid treating arbitrary 12-character strings as ObjectIds.
+        if (objectId.toHexString() === String(captainId).toLowerCase()) {
+            return objectId;
+        }
+    }
+
+    return captainId;
+}
+
 async function startConsumer() {
     await consumer.connect();
-    await consumer.subscribe({ topic: TOPIC, fromBeginning: false });
+
+    await consumer.subscribe({
+        topic: TOPIC,
+        fromBeginning: false
+    });
+
+    consumerStarted = true;
 
     await consumer.run({
-        // eachBatch throw kare to batch dobara process hota hai (data loss nahi)
-        eachBatch: async ({ batch, heartbeat }) => {
+        eachBatchAutoResolve: true,
 
-            // ek batch mein ek captain ke kai updates ho sakte hain -> sirf latest rakho
+        eachBatch: async ({
+            batch,
+            heartbeat,
+            isRunning,
+            isStale
+        }) => {
+            if (!isRunning() || isStale()) {
+                return;
+            }
+
             const latest = new Map();
 
             for (const message of batch.messages) {
+                if (!message.value) {
+                    continue;
+                }
+
                 try {
-                    const d = JSON.parse(message.value.toString());
-                    latest.set(d.captainId, d);
-                } catch (e) {
-                    // kharab message skip
+                    const data = JSON.parse(message.value.toString());
+
+                    if (
+                        data.captainId &&
+                        Number.isFinite(Number(data.ltd)) &&
+                        Number.isFinite(Number(data.lng))
+                    ) {
+                        latest.set(String(data.captainId), {
+                            captainId: String(data.captainId),
+                            ltd: Number(data.ltd),
+                            lng: Number(data.lng)
+                        });
+                    }
+                } catch (error) {
+                    console.warn('Skipping malformed Kafka location message');
                 }
             }
 
-            if (latest.size === 0) return;
+            if (latest.size === 0) {
+                await heartbeat();
+                return;
+            }
 
-            const ops = [...latest.values()].map((d) => ({
+            const operations = [...latest.values()].map((data) => ({
                 updateOne: {
-                    filter: { _id: d.captainId },
-                    update: { $set: { 'location.ltd': d.ltd, 'location.lng': d.lng } }
+                    filter: {
+                        _id: buildCaptainFilter(data.captainId)
+                    },
+                    update: {
+                        $set: {
+                            'location.ltd': data.ltd,
+                            'location.lng': data.lng
+                        }
+                    }
                 }
             }));
 
-            await captainModel.bulkWrite(ops, { ordered: false });
+            // If MongoDB fails, allow KafkaJS to retry the batch.
+            // Do not swallow bulkWrite errors.
+            const result = await captainModel.bulkWrite(operations, {
+                ordered: false
+            });
 
-            console.log(`Location bulk saved: ${ops.length} captains (${batch.messages.length} messages)`);
+            console.log(
+                `Captain locations processed: ${operations.length}; ` +
+                `matched: ${result.matchedCount}; ` +
+                `Kafka messages: ${batch.messages.length}`
+            );
 
             await heartbeat();
         }
     });
+
+    console.log(`Kafka consumer started for topic: ${TOPIC}`);
 }
 
+// ---------------- INITIALIZATION ----------------
 
-// ---------------- INIT / SHUTDOWN ----------------
 async function initLocationKafka() {
-    try {
-        // topic na ho to bana do. Fail ho (permission / plan limit) to bhi aage badho
-        const admin = kafka.admin();
-        try {
-            await admin.connect();
-            await admin.createTopics({
-                topics: [{ topic: TOPIC, numPartitions: PARTITIONS }],
-                waitForLeaders: true
-            });
-        } catch (e) {
-            console.warn('Kafka createTopics skipped:', e.message);
-        } finally {
-            await admin.disconnect().catch(() => {});
-        }
-
-        await producer.connect();
-        producerReady = true;
-
-        await startConsumer();
-
-        console.log(`Kafka location pipeline started (topic: ${TOPIC}, broker: ${brokers[0]})`);
-    } catch (error) {
-        // Kafka down ho to bhi service chalegi (direct DB write fallback)
-        producerReady = false;
-        console.error('Kafka init failed, using direct DB write:', error.message);
+    if (initPromise) {
+        return initPromise;
     }
+
+    initPromise = (async () => {
+        try {
+            // The topic already exists in Aiven.
+            // Do not create it on every startup.
+            await producer.connect();
+            producerReady = true;
+
+            console.log(`Kafka producer connected to ${brokers[0]}`);
+
+            await startConsumer();
+
+            console.log(`Kafka location pipeline ready; topic=${TOPIC}`);
+            return true;
+        } catch (error) {
+            producerReady = false;
+
+            console.error(
+                'Kafka initialization failed:',
+                error.message
+            );
+
+            // Keep the HTTP service running.
+            // publishLocation() returns false until Kafka is ready.
+            return false;
+        }
+    })();
+
+    return initPromise;
 }
+
+// ---------------- SHUTDOWN ----------------
 
 async function shutdownLocationKafka() {
-    try {
-        producerReady = false;
-        await producer.disconnect();
-        await consumer.disconnect();
-    } catch (e) {
-        // ignore
+    if (shutdownPromise) {
+        return shutdownPromise;
     }
+
+    shutdownPromise = (async () => {
+        producerReady = false;
+
+        const tasks = [];
+
+        if (consumerStarted) {
+            tasks.push(consumer.disconnect());
+            consumerStarted = false;
+        }
+
+        tasks.push(producer.disconnect());
+
+        const results = await Promise.allSettled(tasks);
+
+        for (const result of results) {
+            if (result.status === 'rejected') {
+                console.warn(
+                    'Kafka shutdown warning:',
+                    result.reason?.message || result.reason
+                );
+            }
+        }
+
+        console.log('Kafka connections closed');
+    })();
+
+    return shutdownPromise;
 }
 
-module.exports = { initLocationKafka, shutdownLocationKafka, publishLocation };
+module.exports = {
+    initLocationKafka,
+    shutdownLocationKafka,
+    publishLocation
+};
