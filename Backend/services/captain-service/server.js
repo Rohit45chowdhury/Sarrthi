@@ -16,19 +16,24 @@ if (!process.env.INTERNAL_API_KEY) {
     console.warn('WARNING: INTERNAL_API_KEY is not set. Internal routes are disabled (ride/notification services will fail).');
 }
 
-connectToDb().then(() => {
-    const server = http.createServer(app).listen(PORT, () => {
-        console.log(`Captain service running on port ${PORT}`);
+connectToDb()
+    .then(() => {
+        const server = http.createServer(app).listen(PORT, () => {
+            console.log(`Captain service running on port ${PORT}`);
+        });
+
+        // Kafka background mein start hota hai, server ko block nahi karta
+        initLocationKafka();
+
+        const stop = async () => {
+            await shutdownLocationKafka();
+            server.close(() => process.exit(0));
+        };
+
+        process.on('SIGINT', stop);
+        process.on('SIGTERM', stop);
+    })
+    .catch((err) => {
+        console.error('DB connection failed:', err.message);
+        process.exit(1);
     });
-
-    // Kafka background mein start hota hai, server ko block nahi karta
-    initLocationKafka();
-
-    const stop = async () => {
-        await shutdownLocationKafka();
-        server.close(() => process.exit(0));
-    };
-
-    process.on('SIGINT', stop);
-    process.on('SIGTERM', stop);
-});
