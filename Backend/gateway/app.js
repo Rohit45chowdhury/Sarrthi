@@ -1,4 +1,3 @@
-
 require("dotenv").config();
 
 const express = require("express");
@@ -8,9 +7,8 @@ const { createProxyMiddleware } = require("http-proxy-middleware");
 
 const app = express();
 
-// IMPORTANT:
-// Do not add express.json() or express.urlencoded() here.
-// The Gateway should preserve request bodies for downstream services.
+// Do NOT add express.json() or express.urlencoded() here.
+// The Gateway should not consume request bodies before proxying.
 
 // ======================================================
 // SERVICE CONFIGURATION
@@ -29,7 +27,7 @@ const CORS_ORIGINS = (
     process.env.CORS_ORIGINS || "http://localhost:5173"
 )
     .split(",")
-    .map((origin) => origin.trim())
+    .map((origin) => origin.trim().replace(/\/$/, ""))
     .filter(Boolean);
 
 if (process.env.TRUST_PROXY === "true") {
@@ -43,9 +41,16 @@ if (process.env.TRUST_PROXY === "true") {
 const corsMiddleware = cors({
     origin: CORS_ORIGINS,
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+        "Content-Type",
+        "Authorization",
+        "X-Requested-With",
+    ],
 });
 
 app.use((req, res, next) => {
+    // Socket.IO handles its own CORS configuration.
     if (req.path.startsWith("/socket.io")) {
         return next();
     }
@@ -77,7 +82,7 @@ const authLimiter = rateLimit({
     legacyHeaders: false,
     skip: (req) => req.method === "OPTIONS",
     message: {
-        message: "Too many login attempts, try again in a minute",
+        message: "Too many authentication attempts. Try again later.",
     },
 });
 
@@ -88,33 +93,30 @@ const otpLimiter = rateLimit({
     legacyHeaders: false,
     skip: (req) => req.method === "OPTIONS",
     message: {
-        message: "Too many OTP attempts, try again in a minute",
+        message: "Too many OTP attempts. Try again later.",
     },
 });
 
 app.use(generalLimiter);
 
-// OTP endpoints: stricter limit
 app.use(
     ["/auth/send-code", "/auth/verify-code"],
     otpLimiter
 );
 
-// Authentication endpoints
 app.use(
     ["/auth/send-code", "/auth/verify-code", "/auth/google"],
     authLimiter
 );
 
-// Ride OTP verification endpoint
 app.use("/rides/start-ride", otpLimiter);
 
 // ======================================================
-// HEALTH CHECK
+// ROOT & HEALTH CHECK
 // ======================================================
 
 app.get("/", (req, res) => {
-    res.json({
+    res.status(200).json({
         service: "Saarthi API Gateway",
         status: "running",
     });
@@ -125,13 +127,13 @@ app.get("/health", async (req, res) => {
         Object.entries(SERVICES).map(async ([name, url]) => {
             try {
                 const response = await fetch(`${url}/`, {
-                    signal: AbortSignal.timeout(2000),
+                    signal: AbortSignal.timeout(3000),
                 });
 
                 return [
                     name,
                     {
-                        status: "up",
+                        status: response.ok ? "up" : "unhealthy",
                         code: response.status,
                     },
                 ];
@@ -147,13 +149,15 @@ app.get("/health", async (req, res) => {
         })
     );
 
-    const allUp = entries.every(
-        ([, result]) => result.status === "up"
+    const services = Object.fromEntries(entries);
+    const allUp = Object.values(services).every(
+        (service) => service.status === "up"
     );
 
     res.status(allUp ? 200 : 503).json({
         gateway: "up",
-        services: Object.fromEntries(entries),
+        status: allUp ? "healthy" : "degraded",
+        services,
     });
 });
 
@@ -169,6 +173,12 @@ function stripDownstreamCors(proxyRes) {
     }
 }
 
+const withoutDownstreamCors = {
+    on: {
+        proxyRes: stripDownstreamCors,
+    },
+};
+
 function makeProxy(name, target, pathFilter, extra = {}) {
     return createProxyMiddleware({
         target,
@@ -182,7 +192,7 @@ function makeProxy(name, target, pathFilter, extra = {}) {
 
         on: {
             proxyReq: (proxyReq) => {
-                // Do not trust a client-supplied internal service key.
+                // Never forward a client-supplied internal service key.
                 proxyReq.removeHeader("x-internal-key");
             },
 
@@ -203,19 +213,17 @@ function makeProxy(name, target, pathFilter, extra = {}) {
                     error.code === "ETIMEDOUT" ||
                     error.code === "ECONNRESET";
 
-                if (typeof res.writeHead === "function") {
-                    res.writeHead(timedOut ? 504 : 502, {
-                        "Content-Type": "application/json",
-                    });
+                res.writeHead(timedOut ? 504 : 502, {
+                    "Content-Type": "application/json",
+                });
 
-                    res.end(
-                        JSON.stringify({
-                            message: timedOut
-                                ? `${name} service timed out`
-                                : `${name} service unavailable`,
-                        })
-                    );
-                }
+                res.end(
+                    JSON.stringify({
+                        message: timedOut
+                            ? `${name} service timed out`
+                            : `${name} service unavailable`,
+                    })
+                );
             },
 
             ...(extra.on || {}),
@@ -223,26 +231,22 @@ function makeProxy(name, target, pathFilter, extra = {}) {
     });
 }
 
-const withoutDownstreamCors = {
-    on: {
-        proxyRes: stripDownstreamCors,
-    },
-};
-
 // ======================================================
 // BLOCK INTERNAL ROUTES
 // ======================================================
 
-// Internal ride routes must not be publicly accessible.
+// Internal ride routes must not be exposed through the Gateway.
 app.use("/rides/internal", (req, res) => {
     return res.status(404).json({
         message: "Route not found",
     });
 });
 
-// Block captain lookup by MongoDB ID.
+// Prevent public lookups by raw MongoDB document ID.
+const mongoIdPath = /(^|\/)[a-f\d]{24}(\/|$)/i;
+
 app.use("/captains", (req, res, next) => {
-    if (/^\/[a-f\d]{24}(\/|$)/i.test(req.path)) {
+    if (mongoIdPath.test(req.path)) {
         return res.status(404).json({
             message: "Route not found",
         });
@@ -251,9 +255,8 @@ app.use("/captains", (req, res, next) => {
     next();
 });
 
-// Block user lookup by MongoDB ID.
 app.use("/users", (req, res, next) => {
-    if (/^\/[a-f\d]{24}(\/|$)/i.test(req.path)) {
+    if (mongoIdPath.test(req.path)) {
         return res.status(404).json({
             message: "Route not found",
         });
@@ -266,9 +269,7 @@ app.use("/users", (req, res, next) => {
 // USER SERVICE
 // ======================================================
 
-// Gateway: /users/login
-// User Service: /users/login
-
+// Keeps the original /users/... path for the downstream service.
 app.use(
     makeProxy(
         "user",
@@ -282,19 +283,7 @@ app.use(
 // AUTH ROUTES -> USER SERVICE
 // ======================================================
 
-// Gateway:    /auth/send-code
-// User Service: /auth/send-code
-//
-// Same mapping applies to:
-// /auth/verify-code
-// /auth/google
-// /auth/me
-//
-// IMPORTANT:
-// This preserves the /auth prefix.
-// User Service must mount authRoutes using:
-// app.use("/auth", authRoutes)
-
+// Preserves /auth/... paths.
 app.use(
     makeProxy(
         "user-auth",
@@ -352,6 +341,8 @@ const socketProxy = createProxyMiddleware({
     pathFilter: "/socket.io",
     changeOrigin: true,
     ws: true,
+    proxyTimeout: 30000,
+    timeout: 30000,
 
     on: {
         error: (error, req, res) => {
@@ -367,17 +358,15 @@ const socketProxy = createProxyMiddleware({
                 return;
             }
 
-            if (typeof res.writeHead === "function") {
-                res.writeHead(502, {
-                    "Content-Type": "application/json",
-                });
+            res.writeHead(502, {
+                "Content-Type": "application/json",
+            });
 
-                res.end(
-                    JSON.stringify({
-                        message: "Notification service unavailable",
-                    })
-                );
-            }
+            res.end(
+                JSON.stringify({
+                    message: "Notification service unavailable",
+                })
+            );
         },
     },
 });
@@ -407,7 +396,7 @@ app.use((err, req, res, next) => {
     }
 
     res.status(err.status || 500).json({
-        message: err.message || "Gateway error",
+        message: "Gateway error",
     });
 });
 
