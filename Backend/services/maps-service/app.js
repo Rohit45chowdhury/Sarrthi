@@ -18,6 +18,13 @@ app.get('/', (req, res) => {
     res.json({ service: 'Saarthi Maps Service', status: 'running' });
 });
 
+app.get('/health', (req, res) => {
+    res.status(200).json({
+        service: 'Saarthi Maps Service',
+        status: 'healthy'
+    });
+});
+
 app.use('/maps', mapsRoutes);
 
 // 404
