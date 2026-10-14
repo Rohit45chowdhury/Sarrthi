@@ -1,125 +1,135 @@
+
 services:
-  # ---------- Reverse proxy (only public entry) ----------
+  # ---------- Nginx Reverse Proxy ----------
   nginx:
-    image: nginx:alpine
+    build:
+      context: ./Backend/nginx
     container_name: saarthi-nginx
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./certbot/conf:/etc/letsencrypt:ro
       - ./certbot/www:/var/www/certbot:ro
     depends_on:
-      - gateway
       - frontend
+      - gateway
     restart: always
 
-  # ---------- Frontend (React/Vite build served by nginx) ----------
+  # ---------- React / Vite Frontend ----------
   frontend:
     build:
       context: ./Frontend
       args:
-        # use your real domain, or http://<server-ip> for testing
         VITE_API_URL: ${PUBLIC_URL:-http://localhost}
     container_name: saarthi-frontend
     restart: always
 
-  # ---------- Gateway ----------
+  # ---------- API Gateway ----------
   gateway:
-    build: ./Backend/gateway
+    build:
+      context: ./Backend/gateway
     container_name: saarthi-gateway
-    env_file: ./Backend/gateway/.env
+    env_file:
+      - ./Backend/gateway/.env
     environment:
-      PORT: 3000
+      PORT: "3000"
       FRONTEND_URL: ${PUBLIC_URL:-http://localhost}
       USER_SERVICE_URL: http://user-service:3001
       CAPTAIN_SERVICE_URL: http://captain-service:3002
       RIDE_SERVICE_URL: http://ride-service:3003
       MAPS_SERVICE_URL: http://maps-service:3004
       NOTIFICATION_SERVICE_URL: http://notification-service:3005
-      AUTH_SERVICE_URL: http://auth-service:3006
     depends_on:
       - user-service
       - captain-service
       - ride-service
       - maps-service
       - notification-service
-      - auth-service
     restart: always
 
-  # ---------- Microservices ----------
+  # ---------- User Service (includes authentication) ----------
   user-service:
-    build: ./Backend/services/user-service
+    build:
+      context: ./Backend/services/user-service
     container_name: saarthi-user
-    env_file: ./Backend/services/user-service/.env
+    env_file:
+      - ./Backend/services/user-service/.env
     environment:
-      PORT: 3001
+      PORT: "3001"
     restart: always
 
+  # ---------- Captain Service ----------
   captain-service:
-    build: ./Backend/services/captain-service
+    build:
+      context: ./Backend/services/captain-service
     container_name: saarthi-captain
-    env_file: ./Backend/services/captain-service/.env
+    env_file:
+      - ./Backend/services/captain-service/.env
     environment:
-      PORT: 3002
+      PORT: "3002"
       KAFKA_BROKERS: kafka:9092
     depends_on:
       - kafka
     restart: always
 
+  # ---------- Ride Service ----------
   ride-service:
-    build: ./Backend/services/ride-service
+    build:
+      context: ./Backend/services/ride-service
     container_name: saarthi-ride
-    env_file: ./Backend/services/ride-service/.env
+    env_file:
+      - ./Backend/services/ride-service/.env
     environment:
-      PORT: 3003
+      PORT: "3003"
       USER_SERVICE_URL: http://user-service:3001
       CAPTAIN_SERVICE_URL: http://captain-service:3002
       MAPS_SERVICE_URL: http://maps-service:3004
       NOTIFICATION_SERVICE_URL: http://notification-service:3005
     restart: always
 
+  # ---------- Maps Service ----------
   maps-service:
-    build: ./Backend/services/maps-service
+    build:
+      context: ./Backend/services/maps-service
     container_name: saarthi-maps
-    env_file: ./Backend/services/maps-service/.env
+    env_file:
+      - ./Backend/services/maps-service/.env
     environment:
-      PORT: 3004
+      PORT: "3004"
     restart: always
 
+  # ---------- Notification / Socket.IO Service ----------
   notification-service:
-    build: ./Backend/services/notification-service
+    build:
+      context: ./Backend/services/notification-service
     container_name: saarthi-notification
-    env_file: ./Backend/services/notification-service/.env
+    env_file:
+      - ./Backend/services/notification-service/.env
     environment:
-      PORT: 3005
+      PORT: "3005"
       FRONTEND_URL: ${PUBLIC_URL:-http://localhost}
       CAPTAIN_SERVICE_URL: http://captain-service:3002
       USER_SERVICE_URL: http://user-service:3001
     restart: always
 
-  auth-service:
-    build: ./Backend/services/auth-service
-    container_name: saarthi-auth
-    env_file: ./Backend/services/auth-service/.env
-    environment:
-      PORT: 3006
-      REDIS_URL: redis://redis:6379
-      FRONTEND_URL: ${PUBLIC_URL:-http://localhost}
-    depends_on:
-      - redis
-    restart: always
-
-  # ---------- Infrastructure ----------
+  # ---------- Redis ----------
   redis:
     image: redis:7-alpine
     container_name: saarthi-redis
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lru
     volumes:
       - redis_data:/data
     restart: always
 
+  # ---------- Kafka (KRaft mode) ----------
   kafka:
     image: apache/kafka:3.7.0
     container_name: saarthi-kafka

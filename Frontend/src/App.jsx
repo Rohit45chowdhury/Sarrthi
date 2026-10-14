@@ -6,7 +6,7 @@ import Start from './pages/Start'
 import UserLogin from './pages/UserLogin'
 import UserSignup from './pages/UserSignup'
 
-import Captainlogin from './pages/Captainlogin'
+import Captainlogin from "./pages/CaptainLogin"
 import CaptainSignup from './pages/CaptainSignup'
 
 import Home from './pages/Home'
