@@ -245,7 +245,9 @@ function initializeSocket(server) {
 
     io = socketIo(server, {
         cors: {
-            origin: '*',
+            origin: (process.env.FRONTEND_URL || 'http://localhost:5173')
+                .split(',')
+                .map(origin => origin.trim()),
             methods: ['GET', 'POST']
         },
 
