@@ -1,10 +1,19 @@
 import React, { useContext, useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import axios from 'axios'
 
 import LiveTracking from '../components/LiveTracking'
 
 import { SocketContext } from '../context/SocketContext'
 import { UserDataContext } from '../context/UserContext'
+
+const BASE_URL =
+    import.meta.env.VITE_API_URL ||
+    'http://localhost:3000'
+
+const authHeaders = () => ({
+    Authorization: `Bearer ${localStorage.getItem('token')}`
+})
 
 
 // Restore ride after refresh
@@ -25,11 +34,25 @@ const Riding = () => {
     const { socket } = useContext(SocketContext)
     const { user } = useContext(UserDataContext)
 
-    const [ride] = useState(
+    const [ride, setRide] = useState(
         () => location.state?.ride || readStoredRide()
     )
 
     const [captainLocation, setCaptainLocation] = useState(null)
+
+
+    // Go back to Home after the ride is over.
+    // rideEnded tells Home NOT to send the user back here while the
+    // database is still catching up with the "ongoing" status.
+    const leaveRide = () => {
+
+        sessionStorage.removeItem('activeRide')
+
+        navigate('/home', {
+            replace: true,
+            state: { rideEnded: true }
+        })
+    }
 
 
     // Save ride
@@ -40,6 +63,64 @@ const Riding = () => {
         }
 
     }, [ride])
+
+
+    // Refresh the ride from the server.
+    // - gives us captain details / latest fare after a page refresh
+    // - removes an old ride that was left in sessionStorage
+    useEffect(() => {
+
+        let cancelled = false
+
+        const refreshRide = async () => {
+
+            try {
+
+                const { data } = await axios.get(
+                    `${BASE_URL}/rides/active`,
+                    { headers: authHeaders() }
+                )
+
+                if (cancelled) return
+
+                const running = data?.ride
+
+                // server confirmed: no running ride -> it is already finished
+                if (!running) {
+
+                    if (ride) leaveRide()
+
+                    return
+                }
+
+                // only an ongoing ride belongs on this page
+                if (running.status !== 'ongoing') return
+
+                setRide(prev => ({
+                    ...(prev || {}),
+                    ...running,
+                    captain: running.captain || prev?.captain
+                }))
+
+            } catch (error) {
+
+                // network / auth problem -> keep showing what we already have
+                console.error(
+                    'RIDING REFRESH ERROR:',
+                    error.response?.data || error.message
+                )
+            }
+        }
+
+        refreshRide()
+
+        return () => {
+            cancelled = true
+        }
+
+        // run once when the page opens
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
 
 
     // Join user socket room
@@ -71,6 +152,8 @@ const Riding = () => {
 
 
     // Receive captain live location
+    // Home page uses "captain-location-update", this page used
+    // "captain-location" -> listen to both so the map always moves.
     useEffect(() => {
 
         if (!socket) return
@@ -79,20 +162,38 @@ const Riding = () => {
 
             const loc = data?.location || data
 
-            const lat = Number(loc?.lat ?? loc?.latitude ?? loc?.ltd)
-            const lng = Number(loc?.lng ?? loc?.longitude)
+            const rawLat = loc?.lat ?? loc?.latitude ?? loc?.ltd
+            const rawLng = loc?.lng ?? loc?.longitude
+
+            // Number(null) is 0 -> do not turn an empty value into 0,0
+            if (
+                rawLat === null || rawLat === undefined || rawLat === '' ||
+                rawLng === null || rawLng === undefined || rawLng === ''
+            ) {
+                return
+            }
+
+            const lat = Number(rawLat)
+            const lng = Number(rawLng)
 
             if (
                 Number.isFinite(lat) &&
                 Number.isFinite(lng)
             ) {
-                setCaptainLocation([lat, lng])
+                // same position -> keep old state, no re-render
+                setCaptainLocation(prev =>
+                    prev && prev[0] === lat && prev[1] === lng
+                        ? prev
+                        : [lat, lng]
+                )
             }
         }
 
+        socket.on('captain-location-update', handleCaptainLocation)
         socket.on('captain-location', handleCaptainLocation)
 
         return () => {
+            socket.off('captain-location-update', handleCaptainLocation)
             socket.off('captain-location', handleCaptainLocation)
         }
 
@@ -108,9 +209,7 @@ const Riding = () => {
 
             console.log('Ride ended')
 
-            sessionStorage.removeItem('activeRide')
-
-            navigate('/home', { replace: true })
+            leaveRide()
         }
 
         socket.on('ride-ended', handleRideEnded)
@@ -119,6 +218,7 @@ const Riding = () => {
             socket.off('ride-ended', handleRideEnded)
         }
 
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [socket, navigate])
 
 
@@ -146,6 +246,7 @@ const Riding = () => {
 
                     <Link
                         to="/home"
+                        state={{ rideEnded: true }}
                         className="mt-6 inline-flex w-full justify-center rounded-xl bg-[#12334A] px-5 py-3 font-semibold text-white"
                     >
                         Back to Home
@@ -181,6 +282,8 @@ const Riding = () => {
             <div className="relative h-[48dvh] min-h-[280px] w-full shrink-0 overflow-hidden bg-gray-200 sm:h-[55dvh] lg:h-full lg:flex-1">
 
                 <LiveTracking
+                    role="user"
+                    tracking={true}
                     captainLocation={captainLocation}
                 />
 
@@ -199,16 +302,6 @@ const Riding = () => {
                     </h1>
 
                 </div>
-
-                {/* Home button */}
-
-                <Link
-                    to="/home"
-                    aria-label="Go to home"
-                    className="absolute right-4 top-4 z-[500] flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#12334A] shadow-lg transition hover:bg-[#F15A24] hover:text-white"
-                >
-                    <i className="ri-home-5-line text-xl" />
-                </Link>
 
                 {/* Live status */}
 
