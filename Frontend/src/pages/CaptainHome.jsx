@@ -339,49 +339,64 @@ const CaptainHome = () => {
         })
     }
 
+
     /* ================= SOCKET JOIN ================= */
 
     useEffect(() => {
-
-        if (!socket || !captain?._id) return
+        if (!socket || !captain?._id) return;
 
         const joinCaptain = () => {
+            const token = localStorage.getItem('token');
 
-            console.log('Captain socket connected:', socket.id)
+            if (!token) {
+                console.error(
+                    'Captain socket join failed: token missing in localStorage'
+                );
+                return;
+            }
 
-            // backend saves socket.id on this captain -> needed for "new-ride".
-            // We wait for the ack: the server only accepts location updates
-            // AFTER join finished.
+            console.log('Joining captain socket room...');
+
             socket.emit(
                 'join',
                 {
                     userId: captain._id,
-                    userType: 'captain'
+                    userType: 'captain',
+                    token: token
                 },
                 (res) => {
-
                     if (res?.ok) {
-                        sendLocation(true)   // join is saved, server accepts it now
+                        console.log(
+                            'Captain socket room joined successfully'
+                        );
+
+                        // Send the latest known location after joining.
+                        sendLocation(true);
                     } else {
-                        console.error('Join failed:', res?.message)
+                        console.error(
+                            'Captain socket join failed:',
+                            res?.message || 'Unknown error'
+                        );
                     }
                 }
-            )
-        }
+            );
+        };
 
         if (socket.connected) {
-            joinCaptain()
+            joinCaptain();
         }
 
-        // runs again after every reconnect (new socket.id)
-        socket.on('connect', joinCaptain)
+        // Join again after every socket reconnection.
+        socket.on('connect', joinCaptain);
 
         return () => {
-            socket.off('connect', joinCaptain)
-        }
+            socket.off('connect', joinCaptain);
+        };
 
+    // sendLocation intentionally uses the latest component function.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [socket, captain?._id])
+    }, [socket, captain?._id]);
+
 
     const startLocationTracking = () => {
 
