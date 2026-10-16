@@ -29,6 +29,10 @@ const BASE_URL =
 // how long we search for a driver before showing "No drivers available"
 const DRIVER_SEARCH_TIMEOUT = 30000
 
+// while "looking for driver" we also ask the server every few seconds,
+// so the screen still moves to "waiting" if the socket event was missed
+const ACCEPT_POLL_MS = 4000
+
 // backend stores "motorcycle", the frontend panels use the key "moto"
 const FRONT_VEHICLE_KEY = {
     auto: 'auto',
@@ -169,6 +173,9 @@ const Home = () => {
     }, [])
 
     // ================= USER SOCKET JOIN =================
+    // Same as the captain side: token goes with the join request and the
+    // server answers with an ack ({ ok: true }). Without the token the
+    // backend cannot save this socket id, so "ride-accepted" never arrives.
 
     useEffect(() => {
 
@@ -176,12 +183,36 @@ const Home = () => {
 
         const joinUser = () => {
 
+            const token = localStorage.getItem('token')
+
+            if (!token) {
+                console.error('User socket join failed: token missing in localStorage')
+                return
+            }
+
             console.log('USER SOCKET CONNECTED:', socket.id)
 
-            socket.emit('join', {
-                userId: user._id,
-                userType: 'user'
-            })
+            socket.emit(
+                'join',
+                {
+                    userId: user._id,
+                    userType: 'user',
+                    token
+                },
+                res => {
+
+                    if (res?.ok) {
+                        console.log('User socket room joined successfully')
+                    } else {
+                        // no ack at all -> the backend join handler does not
+                        // call callback({ ok: true })
+                        console.error(
+                            'User socket join failed:',
+                            res?.message || 'no ack from server'
+                        )
+                    }
+                }
+            )
         }
 
         if (socket.connected) {
@@ -204,8 +235,9 @@ const Home = () => {
     // app was closed, the phone restarted or the socket missed an event.
     //
     // includePending = true only on the first load. Later checks (app comes
-    // back to the foreground / socket reconnects) restore only accepted and
-    // ongoing rides, so a ride the user backed out of is not forced open again.
+    // back to the foreground / socket reconnects / polling) restore only
+    // accepted and ongoing rides, so a ride the user backed out of is not
+    // forced open again.
     const restoreRide = useCallback(async (includePending = false) => {
 
         try {
@@ -315,6 +347,24 @@ const Home = () => {
         }
 
     }, [socket, restoreRide])
+
+    // ================= FALLBACK POLLING =================
+    // While we wait for a captain, ask the server every few seconds.
+    // If "ride-accepted" was missed (bad socket join, reconnect, etc.) the
+    // accepted ride is still found here and the screen moves to "waiting".
+    // A pending ride changes nothing, so there is no side effect.
+
+    useEffect(() => {
+
+        if (activePanel !== 'looking' || !ride?._id) return
+
+        const id = setInterval(() => {
+            restoreRide(false)
+        }, ACCEPT_POLL_MS)
+
+        return () => clearInterval(id)
+
+    }, [activePanel, ride?._id, restoreRide])
 
     // ================= CANCEL RIDE =================
 
@@ -488,7 +538,6 @@ const Home = () => {
     // ================= RIDE STARTED =================
 
     // Captain verified the OTP and started the ride -> open the riding page.
-    // (This listener was missing, so the user stayed on the waiting screen.)
     useEffect(() => {
 
         if (!socket) return
