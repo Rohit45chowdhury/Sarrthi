@@ -252,8 +252,8 @@ function initializeSocket(server) {
         },
 
         // Detect dead / closed browser connections
-        pingInterval: 5000,
-        pingTimeout: 10000
+        pingInterval: 25000,
+        pingTimeout: 30000
     });
 
 

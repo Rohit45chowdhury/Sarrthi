@@ -1,93 +1,97 @@
+
 import React, {
     createContext,
     useEffect,
     useState
-} from 'react'
+} from 'react';
 
-import { io } from 'socket.io-client'
+import { io } from 'socket.io-client';
 
-export const SocketContext = createContext({ socket: null })
+export const SocketContext = createContext({
+    socket: null
+});
+
+const API_URL =
+    import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 const SocketProvider = ({ children }) => {
-
-    const [socket, setSocket] = useState(null)
+    const [socket, setSocket] = useState(null);
 
     useEffect(() => {
+        const newSocket = io(API_URL, {
+            path: '/socket.io/',
 
-        const newSocket = io(
-            import.meta.env.VITE_API_URL || 'http://localhost:3000',
-            {
-                transports: ['websocket'],
-                reconnection: true,
-                reconnectionDelay: 1000,
-                reconnectionDelayMax: 5000
-            }
-        )
+            // WebSocket-only: use after confirming Nginx
+            // correctly forwards WebSocket connections.
+            transports: ['websocket'],
 
-        setSocket(newSocket)
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            timeout: 20000
+        });
+
+        setSocket(newSocket);
 
         const handleConnect = () => {
-            console.log('Socket connected:', newSocket.id)
-        }
+            console.log('Socket connected:', newSocket.id);
+        };
 
-        const handleDisconnect = reason => {
-            console.log('Socket disconnected:', reason)
-        }
+        const handleDisconnect = (reason) => {
+            console.log('Socket disconnected:', reason);
+        };
 
-        const handleError = error => {
-            console.error('Socket connection error:', error.message)
-        }
+        const handleError = (error) => {
+            console.error('Socket connection error:', error.message);
+        };
 
-        // Phone / browser can freeze the tab in the background and the
-        // reconnect timer may not run. When the app comes back to the
-        // foreground, reconnect right away. Home / CaptainHome re-join their
-        // room on every "connect" event, so events start flowing again.
         const handleVisibility = () => {
-
             if (
                 document.visibilityState === 'visible' &&
                 !newSocket.connected
             ) {
-                newSocket.connect()
+                newSocket.connect();
             }
-        }
+        };
 
-        // DEV ONLY: logs every event the server sends to this browser.
-        // If "new-ride" never shows here on the captain's page, the backend
-        // is not sending it to this socket (not joined / not in radius).
         const handleAny = (event, ...args) => {
-            console.log('SOCKET EVENT:', event, ...args)
-        }
+            console.log('SOCKET EVENT:', event, ...args);
+        };
 
-        newSocket.on('connect', handleConnect)
-        newSocket.on('disconnect', handleDisconnect)
-        newSocket.on('connect_error', handleError)
-
-        document.addEventListener('visibilitychange', handleVisibility)
+        newSocket.on('connect', handleConnect);
+        newSocket.on('disconnect', handleDisconnect);
+        newSocket.on('connect_error', handleError);
 
         if (import.meta.env.DEV) {
-            newSocket.onAny(handleAny)
+            newSocket.onAny(handleAny);
         }
+
+        document.addEventListener(
+            'visibilitychange',
+            handleVisibility
+        );
 
         return () => {
+            newSocket.off('connect', handleConnect);
+            newSocket.off('disconnect', handleDisconnect);
+            newSocket.off('connect_error', handleError);
+            newSocket.offAny(handleAny);
 
-            newSocket.off('connect', handleConnect)
-            newSocket.off('disconnect', handleDisconnect)
-            newSocket.off('connect_error', handleError)
-            newSocket.offAny(handleAny)
+            document.removeEventListener(
+                'visibilitychange',
+                handleVisibility
+            );
 
-            document.removeEventListener('visibilitychange', handleVisibility)
-
-            newSocket.disconnect()
-        }
-
-    }, [])
+            newSocket.disconnect();
+        };
+    }, []);
 
     return (
         <SocketContext.Provider value={{ socket }}>
             {children}
         </SocketContext.Provider>
-    )
-}
+    );
+};
 
-export default SocketProvider
+export default SocketProvider;
