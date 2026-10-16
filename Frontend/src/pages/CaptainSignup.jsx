@@ -1,25 +1,37 @@
+
 import React, { useContext, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { CaptainDataContext } from "../context/CapatainContext";
 
-// Same rules as backend model
-const PLATE_REGEX = /^([A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4}|[0-9]{2}BH[0-9]{4}[A-Z]{1,2})$/;
-const LICENSE_REGEX = /^[A-Z]{2}[0-9]{2}(19|20)[0-9]{2}[0-9]{7}$/;
-const CAPACITY_LIMITS = { motorcycle: 1, auto: 3, car: 8 };
+// Production API URL comes from Frontend/.env
+const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
 
-const normalize = (v = "") => v.toUpperCase().replace(/[\s-]/g, "");
+// Same validation rules as the frontend currently uses
+const PLATE_REGEX =
+  /^([A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4}|[0-9]{2}BH[0-9]{4}[A-Z]{1,2})$/;
+
+const LICENSE_REGEX = /^[A-Z]{2}[0-9]{2}(19|20)[0-9]{2}[0-9]{7}$/;
+
+const CAPACITY_LIMITS = {
+  motorcycle: 1,
+  auto: 3,
+  car: 8,
+};
+
+const normalize = (value = "") =>
+  value.toUpperCase().replace(/[\s-]/g, "");
 
 const inputBase =
   "w-full rounded-xl border bg-white px-4 py-4 text-base text-[#12334A] outline-none transition duration-200 placeholder:text-gray-400 focus:ring-2";
+
 const inputOk =
   "border-gray-300 focus:border-[#F15A24] focus:ring-[#F15A24]/15";
+
 const inputBad =
   "border-red-400 focus:border-red-500 focus:ring-red-200";
 
 const CaptainSignup = () => {
-
   const navigate = useNavigate();
-
   const { updateCaptain } = useContext(CaptainDataContext);
 
   const [formData, setFormData] = useState({
@@ -43,130 +55,153 @@ const CaptainSignup = () => {
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
 
-  const handleChange = (e) => {
+  const handleChange = (event) => {
+    const { name, value } = event.target;
 
-    const { name, value } = e.target;
+    setError("");
 
-    // Field change par us field ka error hata do
     if (fieldErrors[name]) {
-      setFieldErrors((prev) => ({ ...prev, [name]: "" }));
+      setFieldErrors((previous) => ({
+        ...previous,
+        [name]: "",
+      }));
     }
 
     if (name === "firstname" || name === "lastname") {
-
-      setFormData({
-        ...formData,
+      setFormData((previous) => ({
+        ...previous,
         fullname: {
-          ...formData.fullname,
+          ...previous.fullname,
           [name]: value,
         },
-      });
+      }));
+      return;
+    }
 
-    } else if (name === "vehicleType") {
-
-      // Type badalne par capacity us type ki limit ke andar rakho
+    if (name === "vehicleType") {
       const limit = CAPACITY_LIMITS[value];
-      const currentCap = Number(formData.vehicle.capacity);
 
-      setFormData({
-        ...formData,
-        vehicle: {
-          ...formData.vehicle,
-          vehicleType: value,
-          capacity: currentCap > limit ? String(limit) : formData.vehicle.capacity,
-        },
+      setFormData((previous) => {
+        const currentCapacity = Number(previous.vehicle.capacity);
+
+        return {
+          ...previous,
+          vehicle: {
+            ...previous.vehicle,
+            vehicleType: value,
+            capacity:
+              currentCapacity > limit
+                ? String(limit)
+                : previous.vehicle.capacity,
+          },
+        };
       });
+      return;
+    }
 
-    } else if (
+    if (
       name === "color" ||
       name === "model" ||
       name === "plate" ||
       name === "capacity"
     ) {
-
-      setFormData({
-        ...formData,
+      setFormData((previous) => ({
+        ...previous,
         vehicle: {
-          ...formData.vehicle,
-          [name]: name === "plate" ? value.toUpperCase() : value,
+          ...previous.vehicle,
+          [name]:
+            name === "plate" ? value.toUpperCase() : value,
         },
-      });
-
-    } else {
-
-      setFormData({
-        ...formData,
-        [name]: name === "licenseNumber" ? value.toUpperCase() : value,
-      });
-
+      }));
+      return;
     }
 
+    setFormData((previous) => ({
+      ...previous,
+      [name]:
+        name === "licenseNumber" ? value.toUpperCase() : value,
+    }));
   };
 
-  // Client side verification (backend bhi dobara check karta hai)
   const validate = () => {
+    const errors = {};
 
-    const errs = {};
+    if (formData.fullname.firstname.trim().length < 3) {
+      errors.firstname = "First name must contain at least 3 characters";
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
+      errors.email = "Enter a valid email address";
+    }
+
+    if (formData.password.length < 8) {
+      errors.password = "Password must be at least 8 characters";
+    }
+
+    if (formData.vehicle.color.trim().length < 3) {
+      errors.color = "Enter a valid vehicle color";
+    }
 
     if (formData.vehicle.model.trim().length < 2) {
-      errs.model = "Enter your vehicle model, e.g. Swift Dzire";
+      errors.model = "Enter your vehicle model, e.g. Swift Dzire";
     }
 
     const plate = normalize(formData.vehicle.plate);
+
     if (!PLATE_REGEX.test(plate)) {
-      errs.plate = "Enter a valid vehicle number, e.g. BR01AB1234";
+      errors.plate = "Enter a valid vehicle number, e.g. BR01AB1234";
     }
 
     if (formData.licenseNumber.trim()) {
       if (!LICENSE_REGEX.test(normalize(formData.licenseNumber))) {
-        errs.licenseNumber = "Invalid license number, e.g. BR0620201234567";
+        errors.licenseNumber =
+          "Invalid license number, e.g. BR0620201234567";
       }
     }
 
-    const cap = Number(formData.vehicle.capacity);
+    const capacity = Number(formData.vehicle.capacity);
     const limit = CAPACITY_LIMITS[formData.vehicle.vehicleType];
-    if (!cap || cap < 1) {
-      errs.capacity = "Capacity must be at least 1";
-    } else if (cap > limit) {
-      errs.capacity = `A ${formData.vehicle.vehicleType} can carry at most ${limit} passenger(s)`;
+
+    if (!Number.isInteger(capacity) || capacity < 1) {
+      errors.capacity = "Capacity must be at least 1";
+    } else if (capacity > limit) {
+      errors.capacity =
+        `A ${formData.vehicle.vehicleType} can carry at most ${limit} passenger(s)`;
     }
 
-    if (formData.password.length < 8) {
-      errs.password = "Password must be at least 8 characters";
-    }
-
-    return errs;
+    return errors;
   };
 
-  const handleSubmit = async (e) => {
-
-    e.preventDefault();
-
+  const handleSubmit = async (event) => {
+    event.preventDefault();
     setError("");
 
-    const errs = validate();
-    setFieldErrors(errs);
+    const errors = validate();
+    setFieldErrors(errors);
 
-    // Verification fail = captain reject, request backend tak jaati hi nahi
-    if (Object.keys(errs).length > 0) {
+    if (Object.keys(errors).length > 0) {
       setError("Please fix the highlighted fields to continue.");
+      return;
+    }
+
+    if (!API_URL) {
+      setError(
+        "Production API URL is missing. Please configure VITE_API_URL and redeploy the frontend."
+      );
+      console.error("VITE_API_URL is not configured.");
       return;
     }
 
     setLoading(true);
 
     try {
-
       const payload = {
         fullname: {
           firstname: formData.fullname.firstname.trim(),
           lastname: formData.fullname.lastname.trim(),
         },
-
         email: formData.email.trim().toLowerCase(),
-
         password: formData.password,
-
         vehicle: {
           color: formData.vehicle.color.trim(),
           model: formData.vehicle.model.trim(),
@@ -181,66 +216,64 @@ const CaptainSignup = () => {
       }
 
       const response = await fetch(
-        "http://localhost:3000/captains/register",
+        `${API_URL}/captains/register`,
         {
           method: "POST",
-
           headers: {
             "Content-Type": "application/json",
           },
-
           body: JSON.stringify(payload),
         }
       );
 
-      const data = await response.json();
+      // Handle responses that are not JSON as well
+      const responseText = await response.text();
+      let data = {};
+
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        data = {};
+      }
 
       if (!response.ok) {
-
-        // express-validator ka errors array ya simple message dono handle
-        const msg =
+        const message =
           data.errors?.[0]?.msg ||
           data.message ||
-          "Captain registration failed";
+          `Registration failed (HTTP ${response.status})`;
 
-        throw new Error(msg);
-
+        throw new Error(message);
       }
 
-      // Save captain JWT
-      if (data.token) {
-        localStorage.setItem("token", data.token);
-      }
-
-      // Save captain data
-      if (data.captain) {
-
-        localStorage.setItem(
-          "captain",
-          JSON.stringify(data.captain)
+      if (!data.token) {
+        throw new Error(
+          "Registration response did not include an authentication token."
         );
-
-        updateCaptain(data.captain);
-
       }
 
-      // Accepted: captain DB mein save ho gaya
+      // Save authentication token
+      localStorage.setItem("token", data.token);
+
+      // Save captain profile if returned by the backend
+      if (data.captain) {
+        localStorage.setItem("captain", JSON.stringify(data.captain));
+        updateCaptain(data.captain);
+      }
+
       navigate("/captain-home");
+    } catch (err) {
+      console.error("Captain signup error:", err);
 
-    } catch (error) {
-
-      console.error("Captain signup error:", error);
-
-      setError(
-        error.message || "Unable to connect to server"
-      );
-
+      if (err instanceof TypeError) {
+        setError(
+          "Unable to connect to Saarthi server. Check the API URL, Nginx/Gateway status, and CORS configuration."
+        );
+      } else {
+        setError(err.message || "Unable to register captain.");
+      }
     } finally {
-
       setLoading(false);
-
     }
-
   };
 
   const FieldError = ({ msg }) =>
@@ -250,10 +283,7 @@ const CaptainSignup = () => {
 
   return (
     <div className="min-h-screen w-full bg-[#F5F7FA] flex items-center justify-center px-4 py-8">
-
       <div className="w-full max-w-md">
-
-        {/* Logo */}
         <div className="mb-8">
           <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-[#12334A]">
             Saarthi<span className="text-[#F15A24]">.</span>
@@ -264,10 +294,7 @@ const CaptainSignup = () => {
           </p>
         </div>
 
-        {/* Card */}
         <div className="w-full rounded-2xl bg-white p-6 shadow-xl shadow-[#12334A]/5 sm:p-8">
-
-          {/* Header */}
           <h2 className="text-2xl sm:text-3xl font-bold text-[#12334A]">
             Create Captain Account
           </h2>
@@ -276,9 +303,11 @@ const CaptainSignup = () => {
             Register as a Saarthi captain. Your details are verified instantly.
           </p>
 
-          {/* Error */}
           {error && (
-            <div className="mt-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+            <div
+              role="alert"
+              className="mt-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600"
+            >
               {error}
             </div>
           )}
@@ -288,20 +317,23 @@ const CaptainSignup = () => {
             className="mt-7 space-y-4"
             noValidate
           >
-
-            {/* First + Last Name */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-
-              <input
-                type="text"
-                name="firstname"
-                placeholder="First name"
-                value={formData.fullname.firstname}
-                onChange={handleChange}
-                required
-                minLength={3}
-                className={`${inputBase} ${inputOk}`}
-              />
+              <div>
+                <input
+                  type="text"
+                  name="firstname"
+                  placeholder="First name"
+                  value={formData.fullname.firstname}
+                  onChange={handleChange}
+                  autoComplete="given-name"
+                  required
+                  minLength={3}
+                  className={`${inputBase} ${
+                    fieldErrors.firstname ? inputBad : inputOk
+                  }`}
+                />
+                <FieldError msg={fieldErrors.firstname} />
+              </div>
 
               <input
                 type="text"
@@ -309,23 +341,27 @@ const CaptainSignup = () => {
                 placeholder="Last name"
                 value={formData.fullname.lastname}
                 onChange={handleChange}
+                autoComplete="family-name"
                 className={`${inputBase} ${inputOk}`}
               />
-
             </div>
 
-            {/* Email */}
-            <input
-              type="email"
-              name="email"
-              placeholder="Email"
-              value={formData.email}
-              onChange={handleChange}
-              required
-              className={`${inputBase} ${inputOk}`}
-            />
+            <div>
+              <input
+                type="email"
+                name="email"
+                placeholder="Email"
+                value={formData.email}
+                onChange={handleChange}
+                autoComplete="email"
+                required
+                className={`${inputBase} ${
+                  fieldErrors.email ? inputBad : inputOk
+                }`}
+              />
+              <FieldError msg={fieldErrors.email} />
+            </div>
 
-            {/* Password */}
             <div>
               <input
                 type="password"
@@ -333,27 +369,30 @@ const CaptainSignup = () => {
                 placeholder="Password (min 8 characters)"
                 value={formData.password}
                 onChange={handleChange}
+                autoComplete="new-password"
                 required
-                className={`${inputBase} ${fieldErrors.password ? inputBad : inputOk}`}
+                className={`${inputBase} ${
+                  fieldErrors.password ? inputBad : inputOk
+                }`}
               />
               <FieldError msg={fieldErrors.password} />
             </div>
 
-            {/* License */}
             <div>
               <input
                 type="text"
                 name="licenseNumber"
-                placeholder="Driving license number"
+                placeholder="Driving license number (optional)"
                 value={formData.licenseNumber}
                 onChange={handleChange}
                 maxLength={20}
-                className={`${inputBase} uppercase placeholder:normal-case ${fieldErrors.licenseNumber ? inputBad : inputOk}`}
+                className={`${inputBase} uppercase placeholder:normal-case ${
+                  fieldErrors.licenseNumber ? inputBad : inputOk
+                }`}
               />
               <FieldError msg={fieldErrors.licenseNumber} />
             </div>
 
-            {/* Vehicle Details */}
             <div className="pt-3">
               <h3 className="text-lg font-bold text-[#12334A]">
                 Vehicle Details
@@ -364,7 +403,6 @@ const CaptainSignup = () => {
               </p>
             </div>
 
-            {/* Vehicle Type */}
             <select
               name="vehicleType"
               value={formData.vehicle.vehicleType}
@@ -376,19 +414,22 @@ const CaptainSignup = () => {
               <option value="auto">Auto</option>
             </select>
 
-            {/* Vehicle Color */}
-            <input
-              type="text"
-              name="color"
-              placeholder="Vehicle color"
-              value={formData.vehicle.color}
-              onChange={handleChange}
-              required
-              minLength={3}
-              className={`${inputBase} ${inputOk}`}
-            />
+            <div>
+              <input
+                type="text"
+                name="color"
+                placeholder="Vehicle color"
+                value={formData.vehicle.color}
+                onChange={handleChange}
+                required
+                minLength={3}
+                className={`${inputBase} ${
+                  fieldErrors.color ? inputBad : inputOk
+                }`}
+              />
+              <FieldError msg={fieldErrors.color} />
+            </div>
 
-            {/* Vehicle Model */}
             <div>
               <input
                 type="text"
@@ -399,12 +440,13 @@ const CaptainSignup = () => {
                 required
                 minLength={2}
                 maxLength={40}
-                className={`${inputBase} ${fieldErrors.model ? inputBad : inputOk}`}
+                className={`${inputBase} ${
+                  fieldErrors.model ? inputBad : inputOk
+                }`}
               />
               <FieldError msg={fieldErrors.model} />
             </div>
 
-            {/* Vehicle Plate */}
             <div>
               <input
                 type="text"
@@ -414,12 +456,13 @@ const CaptainSignup = () => {
                 onChange={handleChange}
                 required
                 maxLength={14}
-                className={`${inputBase} uppercase placeholder:normal-case ${fieldErrors.plate ? inputBad : inputOk}`}
+                className={`${inputBase} uppercase placeholder:normal-case ${
+                  fieldErrors.plate ? inputBad : inputOk
+                }`}
               />
               <FieldError msg={fieldErrors.plate} />
             </div>
 
-            {/* Capacity */}
             <div>
               <input
                 type="number"
@@ -429,24 +472,23 @@ const CaptainSignup = () => {
                 onChange={handleChange}
                 min="1"
                 max={maxCap}
+                step="1"
                 required
-                className={`${inputBase} ${fieldErrors.capacity ? inputBad : inputOk}`}
+                className={`${inputBase} ${
+                  fieldErrors.capacity ? inputBad : inputOk
+                }`}
               />
               <FieldError msg={fieldErrors.capacity} />
             </div>
 
-            {/* Create Captain Account */}
             <button
               type="submit"
               disabled={loading}
               className="w-full rounded-xl bg-[#12334A] px-5 py-4 text-base sm:text-lg font-semibold text-white shadow-md shadow-[#12334A]/15 transition duration-300 hover:bg-[#F15A24] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {loading
-                ? "Verifying details..."
-                : "Create Captain Account"}
+              {loading ? "Creating account..." : "Create Captain Account"}
             </button>
 
-            {/* User Signup */}
             <button
               type="button"
               onClick={() => navigate("/signup")}
@@ -454,13 +496,10 @@ const CaptainSignup = () => {
             >
               Signup as User
             </button>
-
           </form>
 
-          {/* Login */}
           <p className="mt-7 text-center text-sm sm:text-base text-gray-600">
             Already have an account?{" "}
-
             <Link
               to="/captain-login"
               className="font-semibold text-[#F15A24] underline underline-offset-4 transition hover:text-[#12334A]"
@@ -469,16 +508,12 @@ const CaptainSignup = () => {
             </Link>
           </p>
 
-          {/* Terms */}
           <p className="mt-8 text-center text-xs leading-5 text-gray-400">
             By creating an account, you agree to Saarthi&apos;s Terms and Privacy
             Policy.
           </p>
-
         </div>
-
       </div>
-
     </div>
   );
 };
