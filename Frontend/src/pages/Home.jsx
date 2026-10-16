@@ -9,7 +9,7 @@ import React, {
 import { useGSAP } from '@gsap/react'
 import gsap from 'gsap'
 import axios from 'axios'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 
 import LocationSearchPanel from '../components/LocationSearchPanel'
 import VehiclePanel from '../components/VehiclePanel'
@@ -29,9 +29,6 @@ const BASE_URL =
 // how long we search for a driver before showing "No drivers available"
 const DRIVER_SEARCH_TIMEOUT = 30000
 
-// only these ride statuses may be restored on the Home screen
-const RESTORABLE_STATUSES = ['pending', 'accepted', 'ongoing']
-
 // backend stores "motorcycle", the frontend panels use the key "moto"
 const FRONT_VEHICLE_KEY = {
     auto: 'auto',
@@ -44,7 +41,8 @@ const authHeaders = () => ({
 })
 
 // Initial off-screen position is inline, NOT the Tailwind `translate-y-full`
-// class (Tailwind v4 uses CSS `translate`, GSAP uses `transform`).
+// class. Tailwind v4 uses the CSS `translate` property, GSAP uses `transform`,
+// so the class keeps the sheet hidden even after GSAP animates y to 0.
 const hiddenSheetStyle = { transform: 'translateY(100%)' }
 
 // Number(null) is 0 (would become 0,0 on the map) -> reject null/undefined/''
@@ -71,7 +69,6 @@ const Home = () => {
     const { socket } = useContext(SocketContext)
 
     const navigate = useNavigate()
-    const location = useLocation()
 
     // ================= STATES =================
 
@@ -80,6 +77,8 @@ const Home = () => {
 
     const [panelOpen, setPanelOpen] = useState(false)
     const [activeField, setActiveField] = useState(null)
+
+    const [locationPanelExpanded, setLocationPanelExpanded] = useState(false)
 
     const [suggestions, setSuggestions] = useState({
         pickup: [],
@@ -90,7 +89,6 @@ const Home = () => {
 
     const [fare, setFare] = useState({})
     const [vehicleType, setVehicleType] = useState(null)
-    const [findingTrip, setFindingTrip] = useState(false)
 
     const [ride, setRide] = useState(null)
     const [locating, setLocating] = useState(false)
@@ -108,17 +106,12 @@ const Home = () => {
     // past rides sheet
     const [historyOpen, setHistoryOpen] = useState(false)
 
-    // true until the first "active ride" check finished
+    // true until the first "active ride" check finished (avoids a flash of
+    // the search screen before the running ride is restored)
     const [restoring, setRestoring] = useState(true)
 
-    // true while a cancel request is running
+    // true while a cancel request is running (disables the cancel buttons)
     const [cancelling, setCancelling] = useState(false)
-
-    // in-app "Cancel this ride?" dialog (replaces window.confirm)
-    const [confirmCancelOpen, setConfirmCancelOpen] = useState(false)
-
-    // in-app message (replaces alert)
-    const [toast, setToast] = useState(null)
 
     // search | vehicle | confirm | looking | waiting
     const [activePanel, setActivePanel] = useState('search')
@@ -156,46 +149,8 @@ const Home = () => {
         destination: 0
     })
 
-    // "<rideId>:<status>" of the last ride we restored
+    // "<rideId>:<status>" of the last ride we restored -> same state is not applied twice
     const lastRestoredRef = useRef('')
-
-    const toastTimerRef = useRef(null)
-
-    // ================= TOAST =================
-
-    const showToast = useCallback((message, type = 'error') => {
-
-        clearTimeout(toastTimerRef.current)
-
-        setToast({ message, type })
-
-        toastTimerRef.current = setTimeout(() => setToast(null), 3500)
-
-    }, [])
-
-    useEffect(() => {
-        return () => clearTimeout(toastTimerRef.current)
-    }, [])
-
-    // ================= FINISHED RIDE GUARD =================
-    // A ride that was just finished must never be restored again, even if the
-    // server still reports it for a moment.
-
-    const markRideFinished = id => {
-
-        if (!id) return
-
-        localStorage.setItem('finishedRideId', String(id))
-    }
-
-    const isFinishedRide = id => {
-
-        const finished =
-            location.state?.finishedRideId ||
-            localStorage.getItem('finishedRideId')
-
-        return Boolean(finished) && String(finished) === String(id)
-    }
 
     // ================= USER SOCKET JOIN =================
 
@@ -204,6 +159,8 @@ const Home = () => {
         if (!socket || !user?._id) return
 
         const joinUser = () => {
+
+            console.log('USER SOCKET CONNECTED:', socket.id)
 
             socket.emit('join', {
                 userId: user._id,
@@ -226,8 +183,13 @@ const Home = () => {
 
     // ================= RESTORE RUNNING RIDE =================
 
-    // includePending = true only on the first load. Later checks restore only
-    // accepted and ongoing rides.
+    // Asks the server for the running ride and puts the screen back into the
+    // right state. The database is the source of truth, so this works after the
+    // app was closed, the phone restarted or the socket missed an event.
+    //
+    // includePending = true only on the first load. Later checks (app comes
+    // back to the foreground / socket reconnects) restore only accepted and
+    // ongoing rides, so a ride the user backed out of is not forced open again.
     const restoreRide = useCallback(async (includePending = false) => {
 
         try {
@@ -239,14 +201,8 @@ const Home = () => {
 
             const running = data?.ride
 
-            // server confirmed: no running ride
+            // null  -> server confirmed: no running ride
             if (!running) return null
-
-            // finished / cancelled / unknown status -> treat as no ride
-            if (!RESTORABLE_STATUSES.includes(running.status)) return null
-
-            // the ride the user just finished -> treat as no ride
-            if (isFinishedRide(running._id)) return null
 
             if (running.status === 'pending' && !includePending) return running
 
@@ -279,6 +235,8 @@ const Home = () => {
 
             if (running.status === 'accepted') {
 
+                // captain is on the way: map in tracking mode, position arrives
+                // through "captain-location-update"
                 setCaptainLocation(null)
                 setShowLiveTracking(true)
 
@@ -302,7 +260,6 @@ const Home = () => {
             )
         }
 
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [navigate])
 
     // first load
@@ -312,7 +269,8 @@ const Home = () => {
 
     }, [restoreRide])
 
-    // app comes back to the foreground / socket reconnects
+    // app comes back to the foreground / socket reconnects: an event
+    // ("ride-accepted", "ride-started") may have been missed meanwhile
     useEffect(() => {
 
         const handleVisible = () => {
@@ -334,7 +292,7 @@ const Home = () => {
 
     }, [socket, restoreRide])
 
-    // ================= RESET =================
+    // ================= CANCEL RIDE =================
 
     // back to the search screen, forget everything about the old ride
     const resetRideState = () => {
@@ -343,17 +301,19 @@ const Home = () => {
         setShowLiveTracking(false)
         setCaptainLocation(null)
         setNoDriverFound(false)
-        setConfirmCancelOpen(false)
         setActivePanel('search')
 
         lastRestoredRef.current = ''
     }
 
-    // ================= CANCEL RIDE =================
-
-    // pendingOnly -> cancel only if no captain accepted yet (used by "Try again")
-    // silent      -> no message when it fails
+    // returns true when the ride is gone (cancelled or already not running)
+    //
+    // ask         -> show the "Cancel this ride?" confirmation
+    // pendingOnly -> cancel only if no captain accepted yet (used by "Try again",
+    //                so a ride that was accepted a second ago is never killed)
+    // silent      -> no alert when it fails
     const cancelRide = async ({
+        ask = true,
         pendingOnly = false,
         silent = false
     } = {}) => {
@@ -367,6 +327,8 @@ const Home = () => {
 
         if (cancelling) return false
 
+        if (ask && !window.confirm('Cancel this ride?')) return false
+
         setCancelling(true)
 
         try {
@@ -379,8 +341,6 @@ const Home = () => {
 
             resetRideState()
 
-            if (!silent) showToast('Ride cancelled.', 'info')
-
             return true
 
         } catch (error) {
@@ -390,7 +350,10 @@ const Home = () => {
                 error.response?.data || error.message
             )
 
-            // Ask the server what really happened
+            // Ask the server what really happened:
+            // null      -> ride is already cancelled / expired -> just reset
+            // accepted  -> a captain accepted it -> screen moves to waiting
+            // ongoing   -> ride started -> screen moves to the riding page
             const active = await restoreRide(false)
 
             if (active === null) {
@@ -398,10 +361,8 @@ const Home = () => {
                 return true
             }
 
-            setConfirmCancelOpen(false)
-
             if (!silent) {
-                showToast(
+                alert(
                     error.response?.data?.message ||
                     'Unable to cancel the ride.'
                 )
@@ -415,12 +376,14 @@ const Home = () => {
         }
     }
 
-    // "Try again" on the no-driver screen
+    // "Try again" on the no-driver screen: cancel the old pending ride first,
+    // otherwise two pending rides would exist for this user
     const retryRide = async () => {
 
         if (ride?._id) {
 
             const done = await cancelRide({
+                ask: false,
                 pendingOnly: true,
                 silent: true
             })
@@ -448,36 +411,13 @@ const Home = () => {
 
             resetRideState()
 
-            showToast('Your captain cancelled the ride. Please book again.')
+            alert('Your captain cancelled the ride. Please book again.')
         }
 
         socket.on('ride-cancelled', handleCancelled)
 
         return () => {
             socket.off('ride-cancelled', handleCancelled)
-        }
-
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [socket, ride?._id])
-
-    // the ride was finished -> clear everything, never show waiting again
-    useEffect(() => {
-
-        if (!socket) return
-
-        const handleEnded = data => {
-
-            const endedId = data?._id || data?.ride?._id || data?.rideId || ride?._id
-
-            markRideFinished(endedId)
-
-            resetRideState()
-        }
-
-        socket.on('ride-ended', handleEnded)
-
-        return () => {
-            socket.off('ride-ended', handleEnded)
         }
 
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -491,6 +431,8 @@ const Home = () => {
 
         const handleRideAccepted = data => {
 
+            console.log('RIDE ACCEPTED:', data)
+
             const acceptedRide = data?.ride || data
 
             if (!acceptedRide || typeof acceptedRide !== 'object') {
@@ -498,11 +440,10 @@ const Home = () => {
                 return
             }
 
-            // a brand new ride was accepted -> it is not the finished one
-            if (acceptedRide._id && isFinishedRide(acceptedRide._id)) return
-
             setRide(acceptedRide)
 
+            // map switches to tracking mode, the captain position arrives
+            // through "captain-location-update"
             setCaptainLocation(null)
             setShowLiveTracking(true)
 
@@ -515,11 +456,13 @@ const Home = () => {
             socket.off('ride-accepted', handleRideAccepted)
         }
 
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [socket])
 
     // ================= NO DRIVER AVAILABLE =================
 
+    // Timeout: starts when the "looking" panel opens. If no captain accepts
+    // in time, show "No drivers available". When the ride is accepted the
+    // panel changes to 'waiting', the cleanup runs and the timer is cancelled.
     useEffect(() => {
 
         setNoDriverFound(false)
@@ -534,6 +477,8 @@ const Home = () => {
 
     }, [activePanel])
 
+    // Optional: if the backend emits "no-captains-available" (nearby captain
+    // list was empty) show the message immediately. Harmless if never emitted.
     useEffect(() => {
 
         if (!socket) return
@@ -558,6 +503,7 @@ const Home = () => {
 
         const handleCaptainLocation = data => {
 
+            // payload: { ltd, lng }  (also accepts { location: { ltd, lng } })
             const point = toCoords(
                 data?.ltd ?? data?.location?.ltd,
                 data?.lng ?? data?.location?.lng
@@ -568,6 +514,7 @@ const Home = () => {
                 return
             }
 
+            // same position -> keep old state, no re-render
             setCaptainLocation(prev =>
                 prev && prev[0] === point[0] && prev[1] === point[1]
                     ? prev
@@ -588,10 +535,6 @@ const Home = () => {
     const handleLogout = () => {
 
         localStorage.removeItem('token')
-        localStorage.removeItem('finishedRideId')
-
-        resetRideState()
-
         navigate('/login')
     }
 
@@ -641,7 +584,7 @@ const Home = () => {
     const fetchCurrentLocation = async () => {
 
         if (!navigator.geolocation) {
-            return showToast('Geolocation is not supported on this device.')
+            return alert('Geolocation is not supported')
         }
 
         if (locating) return
@@ -689,10 +632,8 @@ const Home = () => {
 
             console.error('Location error:', error)
 
-            showToast(
-                error.code === 1
-                    ? 'Location permission denied. Please allow location access.'
-                    : 'Unable to get current location. Please enter pickup manually.'
+            alert(
+                'Unable to get current location. Please enter pickup manually.'
             )
 
         } finally {
@@ -719,6 +660,7 @@ const Home = () => {
 
         if (input.length < 3) {
 
+            // invalidate any request that is still in flight
             requestIdRef.current[field]++
 
             setSuggestionsFor(field, [])
@@ -743,6 +685,7 @@ const Home = () => {
                     }
                 )
 
+                // a newer request exists -> ignore this stale response
                 if (requestId !== requestIdRef.current[field]) {
                     return
                 }
@@ -769,6 +712,7 @@ const Home = () => {
 
             } finally {
 
+                // only the latest request may turn the loader off
                 if (requestId === requestIdRef.current[field]) {
                     setSuggestionsLoading(false)
                 }
@@ -818,6 +762,8 @@ const Home = () => {
     }
 
     // ================= SEARCH ANIMATION =================
+    // The search block now stays mounted (hidden with CSS), so panelRef is
+    // never null and the panel keeps its height when we come back to it.
 
     useGSAP(() => {
 
@@ -861,12 +807,8 @@ const Home = () => {
     const findTrip = async () => {
 
         if (!pickup || !destination) {
-            return showToast('Please enter pickup and destination.')
+            return alert('Please enter pickup and destination.')
         }
-
-        if (findingTrip) return
-
-        setFindingTrip(true)
 
         setPanelOpen(false)
         setVehiclePanel(true)
@@ -881,6 +823,8 @@ const Home = () => {
                 }
             )
 
+            console.log('Fare:', data)
+
             setFare(data)
 
         } catch (error) {
@@ -892,14 +836,10 @@ const Home = () => {
 
             setVehiclePanel(false)
 
-            showToast(
+            alert(
                 error.response?.data?.message ||
                 'Unable to calculate fare.'
             )
-
-        } finally {
-
-            setFindingTrip(false)
         }
     }
 
@@ -911,16 +851,27 @@ const Home = () => {
             throw new Error('Missing ride information')
         }
 
+        console.log('Creating ride:', {
+            pickup,
+            destination,
+            vehicleType
+        })
+
         const { data } = await axios.post(
             `${BASE_URL}/rides/create`,
             { pickup, destination, vehicleType },
             { headers: authHeaders() }
         )
 
+        console.log('Ride created:', data)
+
         setRide(data?.ride || data)
 
-        // "new-ride" is emitted by the backend to nearby captains,
-        // never from the frontend.
+        /*
+         * Do NOT emit "new-ride" from the frontend.
+         * The backend creates the ride, finds nearby captains and emits
+         * "new-ride" to each captain's socketId.
+         */
 
         return data
     }
@@ -952,7 +903,7 @@ const Home = () => {
                 error.response?.data || error.message
             )
 
-            showToast(
+            alert(
                 error.response?.data?.message ||
                 error.message ||
                 'Unable to create ride.'
@@ -977,503 +928,440 @@ const Home = () => {
         activePanel !== 'search' &&
         !(showLiveTracking && activePanel === 'waiting')
 
-    const toastColor =
-        toast?.type === 'info'
-            ? 'bg-[#12334A] text-white'
-            : 'bg-red-600 text-white'
-
     // ================= UI =================
 
     return (
 
         <div className="h-screen relative overflow-hidden bg-[#F5F7FA]">
 
-            {/* TOAST */}
+    {/* LOGO */}
 
-            <div
-                className={`pointer-events-none fixed inset-x-0 top-4 z-[120] flex justify-center px-4 transition-all duration-300 ${
-                    toast
-                        ? 'translate-y-0 opacity-100'
-                        : '-translate-y-4 opacity-0'
-                }`}
-            >
-                {toast && (
-                    <div
-                        role="alert"
-                        className={`pointer-events-auto max-w-md rounded-xl px-4 py-3 text-sm font-medium shadow-lg ${toastColor}`}
-                    >
-                        {toast.message}
-                    </div>
-                )}
-            </div>
+    <div
+        className={`absolute left-14 top-5 z-50 transition-all duration-300 ${
+            activePanel === 'search' && !panelOpen
+                ? 'opacity-100 translate-y-0'
+                : 'opacity-0 -translate-y-3 pointer-events-none'
+        }`}
+    >
+        <h1 className="text-3xl font-extrabold tracking-tight text-[#12334A]">
+            Saarthi<span className="text-[#F15A24]">.</span>
+        </h1>
+    </div>
 
 
-            {/* LOGO */}
+    {/* PAST RIDES */}
 
-            <div
-                className={`absolute left-14 top-5 z-50 transition-all duration-300 ${
-                    activePanel === 'search' && !panelOpen
-                        ? 'opacity-100 translate-y-0'
-                        : 'opacity-0 -translate-y-3 pointer-events-none'
-                }`}
-            >
-                <h1 className="text-3xl font-extrabold tracking-tight text-[#12334A]">
-                    Saarthi<span className="text-[#F15A24]">.</span>
-                </h1>
-            </div>
+    <button
+        type="button"
+        onClick={() => setHistoryOpen(true)}
+        aria-label="Past rides"
+        className={`
+            absolute right-[4.5rem] top-5 z-50
+            h-11 w-11
+            bg-white
+            rounded-full
+            shadow-md
+            flex items-center justify-center
+            text-[#12334A]
+            transition-all duration-200
+            hover:bg-[#F15A24]
+            hover:text-white
+            active:scale-95
+            ${
+                activePanel === 'search' && !panelOpen
+                    ? 'opacity-100'
+                    : 'opacity-0 pointer-events-none'
+            }
+        `}
+    >
+        <i className="text-xl ri-history-line" />
+    </button>
 
 
-            {/* PAST RIDES */}
+    {/* LOGOUT */}
+
+    <button
+        type="button"
+        onClick={handleLogout}
+        className="
+            absolute right-5 top-5 z-50
+            h-11 w-11
+            bg-white
+            rounded-full
+            shadow-md
+            flex items-center justify-center
+            text-[#12334A]
+            transition-all duration-200
+            hover:bg-[#F15A24]
+            hover:text-white
+            active:scale-95
+        "
+    >
+        <i className="text-xl ri-logout-box-r-line" />
+    </button>
+
+
+
+
+    {/* MAP (switches to live tracking after the captain accepts) */}
+
+    <div className="h-screen w-screen">
+        <LiveTracking
+            role="user"
+            tracking={showLiveTracking}
+            captainLocation={showLiveTracking ? captainLocation : null}
+            pickupLocation={toCoords(
+                ride?.pickupCoordinates?.ltd,
+                ride?.pickupCoordinates?.lng
+            )}
+            pickupAddress={ride?.pickup || pickup}
+        />
+    </div>
+
+
+    {/* SEARCH */}
+    
+
+    <div
+        className={`${
+            activePanel === 'search' ? 'flex' : 'hidden'
+        } flex-col justify-end h-screen absolute top-0 left-0 w-full pointer-events-none`}
+    >
+
+        <div
+            className="
+                h-[30%]
+                p-6
+                bg-white
+                relative
+                pointer-events-auto
+                rounded-t-[28px]
+                shadow-[0_-8px_30px_rgba(18,51,74,0.08)]
+            "
+        >          
+
+            {/* Close */}
+
+            {/* UP / DOWN ARROW */}
 
             <button
                 type="button"
-                onClick={() => setHistoryOpen(true)}
-                aria-label="Past rides"
-                className={`
-                    absolute right-[4.5rem] top-5 z-50
-                    h-11 w-11
-                    bg-white
-                    rounded-full
-                    shadow-md
-                    flex items-center justify-center
-                    text-[#12334A]
-                    transition-all duration-200
-                    hover:bg-[#F15A24]
-                    hover:text-white
-                    active:scale-95
-                    ${
-                        activePanel === 'search' && !panelOpen
-                            ? 'opacity-100'
-                            : 'opacity-0 pointer-events-none'
-                    }
-                `}
-            >
-                <i className="text-xl ri-history-line" />
-            </button>
-
-
-            {/* LOGOUT */}
-
-            <button
-                type="button"
-                onClick={handleLogout}
-                aria-label="Logout"
+                onClick={() => {
+                    // activeField null ho to suggestions list khali dikhegi, isliye default set karo
+                    setActiveField(f => f || 'destination')
+                    setPanelOpen(v => !v)
+                }}
+                aria-label={panelOpen ? 'Close search panel' : 'Open search panel'}
+                aria-expanded={panelOpen}
                 className="
-                    absolute right-5 top-5 z-50
-                    h-11 w-11
-                    bg-white
-                    rounded-full
-                    shadow-md
-                    flex items-center justify-center
-                    text-[#12334A]
-                    transition-all duration-200
-                    hover:bg-[#F15A24]
-                    hover:text-white
-                    active:scale-95
+                        absolute
+                        left-1/2
+                        z-[60]
+                        flex
+                        h-10
+                        w-10
+                        -translate-x-1/2
+                        items-center
+                        justify-center
+                        rounded-full
+                        border
+                        border-gray-200
+                        bg-white
+                        text-2xl
+                        text-[#12334A]
+                        shadow-lg
+                        transition-all
+                        duration-300
+                        hover:text-[#F15A24]
+                        active:scale-90
                 "
             >
-                <i className="text-xl ri-logout-box-r-line" />
+                <i className={panelOpen ? 'ri-arrow-down-s-line' : 'ri-arrow-up-s-line'} />
             </button>
 
 
-            {/* MAP (switches to live tracking after the captain accepts) */}
+            {/* Heading */}
 
-            <div className="h-screen w-screen">
-                <LiveTracking
-                    role="user"
-                    tracking={showLiveTracking}
-                    captainLocation={showLiveTracking ? captainLocation : null}
-                    pickupLocation={toCoords(
-                        ride?.pickupCoordinates?.ltd,
-                        ride?.pickupCoordinates?.lng
-                    )}
-                    pickupAddress={ride?.pickup || pickup}
-                />
+            <div className="flex items-center gap-2">
+
+                <span className="w-2 h-7 rounded-full bg-[#F15A24]" />
+
+                <h4 className="text-2xl font-bold text-[#12334A]">
+                    Find a trip
+                </h4>
+
             </div>
 
 
-            {/* SEARCH */}
-
-            <div
-                className={`${
-                    activePanel === 'search' ? 'flex' : 'hidden'
-                } flex-col justify-end h-screen absolute top-0 left-0 w-full pointer-events-none`}
+            <form
+                className="relative py-3"
+                onSubmit={e => e.preventDefault()}
             >
+
+                {/* Connecting Line */}
 
                 <div
                     className="
-                        h-[30%]
-                        p-6
-                        bg-white
-                        relative
-                        pointer-events-auto
-                        rounded-t-[28px]
-                        shadow-[0_-8px_30px_rgba(18,51,74,0.08)]
+                        line
+                        absolute
+                        h-16
+                        w-1
+                        top-[50%]
+                        -translate-y-1/2
+                        left-5
+                        bg-[#12334A]
+                        rounded-full
                     "
-                >
+                />
 
-                    {/* UP / DOWN ARROW */}
+
+                {/* PICKUP */}
+
+                <div className="relative">
+
+                    <input
+                        value={pickup}
+                        onClick={focusField('pickup')}
+                        onChange={handleChange(
+                            'pickup',
+                            setPickup
+                        )}
+                        className={`
+                            ${inputClass}
+                            pr-14
+                            border-gray-300
+                            text-[#12334A]
+                            focus:border-[#F15A24]
+                            focus:ring-2
+                            focus:ring-[#F15A24]/15
+                        `}
+                        type="text"
+                        placeholder="Add a pick-up location"
+                    />
+
+
+                    {/* Current Location */}
 
                     <button
                         type="button"
-                        onClick={() => {
-                            setActiveField(f => f || 'destination')
-                            setPanelOpen(v => !v)
-                        }}
-                        aria-label={panelOpen ? 'Close search panel' : 'Open search panel'}
-                        aria-expanded={panelOpen}
+                        disabled={locating}
+                        onClick={fetchCurrentLocation}
                         className="
                             absolute
-                            left-1/2
-                            z-[60]
+                            right-3
+                            top-1/2
+                            -translate-y-1/2
+                            w-9
+                            h-9
                             flex
-                            h-10
-                            w-10
-                            -translate-x-1/2
                             items-center
                             justify-center
                             rounded-full
-                            border
-                            border-gray-200
-                            bg-white
-                            text-2xl
                             text-[#12334A]
-                            shadow-lg
-                            transition-all
-                            duration-300
+                            hover:bg-orange-50
                             hover:text-[#F15A24]
-                            active:scale-90
+                            transition-colors
+                            disabled:opacity-50
                         "
                     >
-                        <i className={panelOpen ? 'ri-arrow-down-s-line' : 'ri-arrow-up-s-line'} />
-                    </button>
 
-
-                    {/* Heading */}
-
-                    <div className="flex items-center gap-2">
-
-                        <span className="w-2 h-7 rounded-full bg-[#F15A24]" />
-
-                        <h4 className="text-2xl font-bold text-[#12334A]">
-                            Find a trip
-                        </h4>
-
-                    </div>
-
-
-                    <form
-                        className="relative py-3"
-                        onSubmit={e => e.preventDefault()}
-                    >
-
-                        {/* Connecting Line */}
-
-                        <div
-                            className="
-                                line
-                                absolute
-                                h-16
-                                w-1
-                                top-[50%]
-                                -translate-y-1/2
-                                left-5
-                                bg-[#12334A]
-                                rounded-full
-                            "
+                        <i
+                            className={`text-xl ${
+                                locating
+                                    ? 'ri-loader-4-line animate-spin text-[#F15A24]'
+                                    : 'ri-crosshair-2-line'
+                            }`}
                         />
 
-
-                        {/* PICKUP */}
-
-                        <div className="relative">
-
-                            <input
-                                value={pickup}
-                                onClick={focusField('pickup')}
-                                onChange={handleChange('pickup', setPickup)}
-                                className={`
-                                    ${inputClass}
-                                    pr-14
-                                    border-gray-300
-                                    text-[#12334A]
-                                    focus:border-[#F15A24]
-                                    focus:ring-2
-                                    focus:ring-[#F15A24]/15
-                                `}
-                                type="text"
-                                placeholder="Add a pick-up location"
-                            />
-
-                            {/* Current Location */}
-
-                            <button
-                                type="button"
-                                disabled={locating}
-                                onClick={fetchCurrentLocation}
-                                aria-label="Use my current location"
-                                className="
-                                    absolute
-                                    right-3
-                                    top-1/2
-                                    -translate-y-1/2
-                                    w-9
-                                    h-9
-                                    flex
-                                    items-center
-                                    justify-center
-                                    rounded-full
-                                    text-[#12334A]
-                                    hover:bg-orange-50
-                                    hover:text-[#F15A24]
-                                    transition-colors
-                                    disabled:opacity-50
-                                "
-                            >
-                                <i
-                                    className={`text-xl ${
-                                        locating
-                                            ? 'ri-loader-4-line animate-spin text-[#F15A24]'
-                                            : 'ri-crosshair-2-line'
-                                    }`}
-                                />
-                            </button>
-
-                        </div>
-
-
-                        {/* DESTINATION */}
-
-                        <input
-                            value={destination}
-                            onClick={focusField('destination')}
-                            onChange={handleChange('destination', setDestination)}
-                            className={`
-                                ${inputClass}
-                                mt-3
-                                border-gray-300
-                                text-[#12334A]
-                                focus:border-[#F15A24]
-                                focus:ring-2
-                                focus:ring-[#F15A24]/15
-                            `}
-                            type="text"
-                            placeholder="Enter your destination"
-                        />
-
-                    </form>
-
-
-                    {/* FIND TRIP */}
-
-                    <button
-                        type="button"
-                        onClick={findTrip}
-                        disabled={findingTrip}
-                        className="
-                            bg-[#12334A]
-                            text-white
-                            px-4
-                            py-3
-                            rounded-xl
-                            mt-3
-                            w-full
-                            font-semibold
-                            transition-all
-                            duration-300
-                            hover:bg-[#F15A24]
-                            active:scale-[0.98]
-                            shadow-md
-                            shadow-[#12334A]/15
-                            disabled:opacity-60
-                            disabled:cursor-not-allowed
-                        "
-                    >
-                        {findingTrip ? 'Finding trip...' : 'Find Trip'}
                     </button>
 
                 </div>
 
 
-                {/* SUGGESTIONS */}
+                {/* DESTINATION */}
 
-                <div
-                    ref={panelRef}
-                    className="
-                        bg-white
-                        h-0
-                        overflow-y-auto
-                        pointer-events-auto
-                    "
-                >
-                    <LocationSearchPanel
-                        suggestions={suggestions[activeField] || []}
-                        loading={suggestionsLoading}
-                        setPickup={handlePickupSelect}
-                        setDestination={handleDestinationSelect}
-                        activeField={activeField}
-                    />
-                </div>
+                <input
+                    value={destination}
+                    onClick={focusField('destination')}
+                    onChange={handleChange(
+                        'destination',
+                        setDestination
+                    )}
+                    className={`
+                        ${inputClass}
+                        mt-3
+                        border-gray-300
+                        text-[#12334A]
+                        focus:border-[#F15A24]
+                        focus:ring-2
+                        focus:ring-[#F15A24]/15
+                    `}
+                    type="text"
+                    placeholder="Enter your destination"
+                />
 
-            </div>
-
-
-            {/* BACKDROP */}
-
-            <div
-                className={`fixed inset-0 z-[5] bg-[#12334A] transition-opacity ${
-                    showBackdrop
-                        ? 'opacity-30'
-                        : 'opacity-0 pointer-events-none'
-                }`}
-            />
+            </form>
 
 
-            {/* VEHICLE */}
+            {/* FIND TRIP */}
 
-            <div
-                ref={refs.vehicle}
-                style={hiddenSheetStyle}
-                className={`${sheet} py-10 bg-white`}
+            <button
+                type="button"
+                onClick={findTrip}
+                className="
+                    bg-[#12334A]
+                    text-white
+                    px-4
+                    py-3
+                    rounded-xl
+                    mt-3
+                    w-full
+                    font-semibold
+                    transition-all
+                    duration-300
+                    hover:bg-[#F15A24]
+                    active:scale-[0.98]
+                    shadow-md
+                    shadow-[#12334A]/15
+                "
             >
-                <VehiclePanel
-                    selectVehicle={setVehicleType}
-                    fare={fare}
-                    setConfirmRidePanel={setConfirmRidePanel}
-                    setVehiclePanel={setVehiclePanel}
-                />
-            </div>
-
-
-            {/* CONFIRM RIDE */}
-
-            <div
-                ref={refs.confirm}
-                style={hiddenSheetStyle}
-                className={`${sheet} py-6 bg-white`}
-            >
-                <ConfirmRide
-                    pickup={pickup}
-                    destination={destination}
-                    fare={fare}
-                    vehicleType={vehicleType}
-                    creatingRide={creatingRide}
-                    setConfirmRidePanel={setConfirmRidePanel}
-                    setVehicleFound={setVehicleFound}
-                    createRide={handleConfirmRide}
-                />
-            </div>
-
-
-            {/* LOOKING FOR DRIVER */}
-
-            <div
-                ref={refs.looking}
-                style={hiddenSheetStyle}
-                className={`${sheet} py-6 bg-white`}
-            >
-                <LookingForDriver
-                    ride={ride}
-                    pickup={pickup}
-                    destination={destination}
-                    fare={fare}
-                    vehicleType={vehicleType}
-                    noDriverFound={noDriverFound}
-                    setVehicleFound={setVehicleFound}
-                    onRetry={retryRide}
-                    onCancel={() => setConfirmCancelOpen(true)}
-                    cancelling={cancelling}
-                />
-            </div>
-
-
-            {/* WAITING FOR DRIVER */}
-
-            <div
-                ref={refs.waiting}
-                style={hiddenSheetStyle}
-                className={`${sheet} py-6 bg-white`}
-            >
-                <WaitingForDriver
-                    ride={ride}
-                    setVehicleFound={setVehicleFound}
-                    setWaitingForDriver={setWaitingForDriver}
-                    waitingForDriver={waitingForDriver}
-                    onCancel={() => setConfirmCancelOpen(true)}
-                    cancelling={cancelling}
-                />
-            </div>
-
-
-            {/* CANCEL CONFIRMATION */}
-
-            {confirmCancelOpen && (
-                <div
-                    className="fixed inset-0 z-[110] flex items-end justify-center bg-[#12334A]/50 p-4 sm:items-center"
-                    onClick={() => !cancelling && setConfirmCancelOpen(false)}
-                >
-                    <div
-                        role="dialog"
-                        aria-modal="true"
-                        className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl"
-                        onClick={e => e.stopPropagation()}
-                    >
-                        <h3 className="text-xl font-bold text-[#12334A]">
-                            Cancel this ride?
-                        </h3>
-
-                        <p className="mt-2 text-sm text-gray-500">
-                            Your captain will be notified and the booking will be removed.
-                        </p>
-
-                        <div className="mt-6 grid grid-cols-2 gap-3">
-
-                            <button
-                                type="button"
-                                disabled={cancelling}
-                                onClick={() => setConfirmCancelOpen(false)}
-                                className="rounded-xl border-2 border-gray-200 px-4 py-3 font-semibold text-[#12334A] transition hover:border-[#12334A] disabled:opacity-60"
-                            >
-                                Keep ride
-                            </button>
-
-                            <button
-                                type="button"
-                                disabled={cancelling}
-                                onClick={() => cancelRide()}
-                                className="rounded-xl bg-red-600 px-4 py-3 font-semibold text-white transition hover:bg-red-700 active:scale-[0.98] disabled:opacity-60"
-                            >
-                                {cancelling ? 'Cancelling...' : 'Yes, cancel'}
-                            </button>
-
-                        </div>
-                    </div>
-                </div>
-            )}
-
-
-            {/* PAST RIDES SHEET */}
-
-            {historyOpen && (
-                <RideHistory
-                    role="user"
-                    onClose={() => setHistoryOpen(false)}
-                />
-            )}
-
-
-            {/* FIRST LOAD: checking for a running ride */}
-
-            {restoring && (
-                <div className="fixed inset-0 z-[90] flex flex-col items-center justify-center gap-3 bg-white/90">
-                    <div className="h-9 w-9 animate-spin rounded-full border-4 border-gray-300 border-t-[#F15A24]" />
-                    <p className="text-sm font-semibold text-[#12334A]">
-                        Loading your ride...
-                    </p>
-                </div>
-            )}
+                Find Trip
+            </button>
 
         </div>
+
+
+        {/* SUGGESTIONS */}
+
+        <div
+            ref={panelRef}
+            className="
+                bg-white
+                h-0
+                overflow-y-auto
+                pointer-events-auto
+            "
+        >
+            <LocationSearchPanel
+                suggestions={suggestions[activeField] || []}
+                loading={suggestionsLoading}
+                setPickup={handlePickupSelect}
+                setDestination={handleDestinationSelect}
+                activeField={activeField}
+            />
+        </div>
+
+    </div>
+
+
+    {/* BACKDROP */}
+
+    <div
+        className={`fixed inset-0 z-[5] bg-[#12334A] transition-opacity ${
+            showBackdrop
+                ? 'opacity-30'
+                : 'opacity-0 pointer-events-none'
+        }`}
+    />
+
+
+    {/* VEHICLE */}
+
+    <div
+        ref={refs.vehicle}
+        style={hiddenSheetStyle}
+        className={`${sheet} py-10 bg-white`}
+    >
+        <VehiclePanel
+            selectVehicle={setVehicleType}
+            fare={fare}
+            setConfirmRidePanel={setConfirmRidePanel}
+            setVehiclePanel={setVehiclePanel}
+        />
+    </div>
+
+
+    {/* CONFIRM RIDE */}
+
+    <div
+        ref={refs.confirm}
+        style={hiddenSheetStyle}
+        className={`${sheet} py-6 bg-white`}
+    >
+        <ConfirmRide
+            pickup={pickup}
+            destination={destination}
+            fare={fare}
+            vehicleType={vehicleType}
+            creatingRide={creatingRide}
+            setConfirmRidePanel={setConfirmRidePanel}
+            setVehicleFound={setVehicleFound}
+            createRide={handleConfirmRide}
+        />
+    </div>
+
+
+    {/* LOOKING FOR DRIVER */}
+
+    <div
+        ref={refs.looking}
+        style={hiddenSheetStyle}
+        className={`${sheet} py-6 bg-white`}
+    >
+        <LookingForDriver
+            ride={ride}
+            pickup={pickup}
+            destination={destination}
+            fare={fare}
+            vehicleType={vehicleType}
+            noDriverFound={noDriverFound}
+            setVehicleFound={setVehicleFound}
+            onRetry={retryRide}
+            onCancel={() => cancelRide()}
+            cancelling={cancelling}
+        />
+    </div>
+
+
+    {/* WAITING FOR DRIVER */}
+
+    <div
+        ref={refs.waiting}
+        style={hiddenSheetStyle}
+        className={`${sheet} py-6 bg-white`}
+    >
+        <WaitingForDriver
+            ride={ride}
+            setVehicleFound={setVehicleFound}
+            setWaitingForDriver={setWaitingForDriver}
+            waitingForDriver={waitingForDriver}
+            onCancel={() => cancelRide()}
+            cancelling={cancelling}
+        />
+    </div>
+
+
+    {/* PAST RIDES SHEET */}
+
+    {historyOpen && (
+        <RideHistory
+            role="user"
+            onClose={() => setHistoryOpen(false)}
+        />
+    )}
+
+
+    {/* FIRST LOAD: checking for a running ride */}
+
+    {restoring && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-white/80">
+            <p className="text-sm font-semibold text-[#12334A]">
+                Loading your ride...
+            </p>
+        </div>
+    )}
+
+</div>
     )
 }
 

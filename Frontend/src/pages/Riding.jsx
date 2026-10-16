@@ -16,16 +16,6 @@ const readStoredRide = () => {
     }
 }
 
-// a ride that is already over must never be shown as "in progress"
-const FINISHED_STATUSES = ['completed', 'cancelled']
-
-const markRideFinished = id => {
-
-    if (!id) return
-
-    localStorage.setItem('finishedRideId', String(id))
-}
-
 
 const Riding = () => {
 
@@ -35,17 +25,9 @@ const Riding = () => {
     const { socket } = useContext(SocketContext)
     const { user } = useContext(UserDataContext)
 
-    const [ride] = useState(() => {
-
-        const found = location.state?.ride || readStoredRide()
-
-        if (found && FINISHED_STATUSES.includes(found.status)) {
-            sessionStorage.removeItem('activeRide')
-            return null
-        }
-
-        return found
-    })
+    const [ride] = useState(
+        () => location.state?.ride || readStoredRide()
+    )
 
     const [captainLocation, setCaptainLocation] = useState(null)
 
@@ -71,6 +53,8 @@ const Riding = () => {
                 userId: user._id,
                 userType: 'user'
             })
+
+            console.log('User joined socket:', user._id)
         }
 
         if (socket.connected) {
@@ -87,8 +71,6 @@ const Riding = () => {
 
 
     // Receive captain live location
-    // (backend event is "captain-location-update" with { ltd, lng };
-    //  "captain-location" is kept as a fallback)
     useEffect(() => {
 
         if (!socket) return
@@ -97,35 +79,20 @@ const Riding = () => {
 
             const loc = data?.location || data
 
-            const rawLat = loc?.lat ?? loc?.latitude ?? loc?.ltd
-            const rawLng = loc?.lng ?? loc?.longitude
+            const lat = Number(loc?.lat ?? loc?.latitude ?? loc?.ltd)
+            const lng = Number(loc?.lng ?? loc?.longitude)
 
             if (
-                rawLat === null || rawLat === undefined || rawLat === '' ||
-                rawLng === null || rawLng === undefined || rawLng === ''
+                Number.isFinite(lat) &&
+                Number.isFinite(lng)
             ) {
-                return
-            }
-
-            const lat = Number(rawLat)
-            const lng = Number(rawLng)
-
-            if (Number.isFinite(lat) && Number.isFinite(lng)) {
-
-                // same position -> no re-render
-                setCaptainLocation(prev =>
-                    prev && prev[0] === lat && prev[1] === lng
-                        ? prev
-                        : [lat, lng]
-                )
+                setCaptainLocation([lat, lng])
             }
         }
 
-        socket.on('captain-location-update', handleCaptainLocation)
         socket.on('captain-location', handleCaptainLocation)
 
         return () => {
-            socket.off('captain-location-update', handleCaptainLocation)
             socket.off('captain-location', handleCaptainLocation)
         }
 
@@ -137,32 +104,13 @@ const Riding = () => {
 
         if (!socket) return
 
-        const handleRideEnded = (data) => {
+        const handleRideEnded = () => {
 
-            const endedId =
-                data?._id ||
-                data?.ride?._id ||
-                data?.rideId ||
-                ride?._id
-
-            // ignore an event that belongs to some other ride
-            if (
-                endedId &&
-                ride?._id &&
-                String(endedId) !== String(ride._id)
-            ) {
-                return
-            }
-
-            // Home must never restore this ride again
-            markRideFinished(endedId || ride?._id)
+            console.log('Ride ended')
 
             sessionStorage.removeItem('activeRide')
 
-            navigate('/home', {
-                replace: true,
-                state: { finishedRideId: endedId || ride?._id }
-            })
+            navigate('/home', { replace: true })
         }
 
         socket.on('ride-ended', handleRideEnded)
@@ -171,11 +119,9 @@ const Riding = () => {
             socket.off('ride-ended', handleRideEnded)
         }
 
-    }, [socket, navigate, ride?._id])
+    }, [socket, navigate])
 
 
-    // Home button: ride is still running, so just go home (Home will bring
-    // the user back here because the ride is still "ongoing")
     // No active ride
     if (!ride) {
 
@@ -235,7 +181,6 @@ const Riding = () => {
             <div className="relative h-[48dvh] min-h-[280px] w-full shrink-0 overflow-hidden bg-gray-200 sm:h-[55dvh] lg:h-full lg:flex-1">
 
                 <LiveTracking
-                    role="user"
                     captainLocation={captainLocation}
                 />
 
