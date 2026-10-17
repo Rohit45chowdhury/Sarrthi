@@ -39,6 +39,25 @@ const authHeaders = () => ({
     'Content-Type': 'application/json'
 })
 
+// FIX 1: same helper as user Home.
+// Number(null) is 0 (would become 0,0 on the map) -> reject null/undefined/''
+const toCoords = (lat, lng) => {
+
+    if (
+        lat === null || lat === undefined || lat === '' ||
+        lng === null || lng === undefined || lng === ''
+    ) {
+        return null
+    }
+
+    const a = Number(lat)
+    const b = Number(lng)
+
+    return Number.isFinite(a) && Number.isFinite(b)
+        ? [a, b]
+        : null
+}
+
 const CaptainHome = () => {
 
     const navigate = useNavigate()
@@ -59,6 +78,10 @@ const CaptainHome = () => {
 
     // live tracking: opens after this captain confirmed a ride
     const [showLiveTracking, setShowLiveTracking] = useState(false)
+
+    // FIX 2: captain's own GPS position [lat, lng] -> goes to the map so
+    // distance to pickup can be calculated (user side gets this via socket)
+    const [captainPosition, setCaptainPosition] = useState(null)
 
     const [otp, setOtp] = useState('')
     const [verifyingOtp, setVerifyingOtp] = useState(false)
@@ -418,6 +441,14 @@ const CaptainHome = () => {
                 lng: longitude
             }
 
+            // FIX 3: also keep the position in state so the map gets it.
+            // Same position -> keep old state, no re-render.
+            setCaptainPosition(prev =>
+                prev && prev[0] === latitude && prev[1] === longitude
+                    ? prev
+                    : [latitude, longitude]
+            )
+
             sendLocation()
         }
 
@@ -760,6 +791,8 @@ const CaptainHome = () => {
         'bg-white text-[#12334A] shadow-lg transition-all duration-200 ' +
         'hover:bg-[#F15A24] hover:text-white active:scale-95 sm:h-12 sm:w-12'
 
+    const isTracking = showLiveTracking && Boolean(ride)
+
     return (
 
     <div className="relative h-[100dvh] w-full overflow-hidden bg-gray-100">
@@ -769,17 +802,16 @@ const CaptainHome = () => {
         ========================================================== */}
         <div className="absolute inset-0 z-0">
 
+            {/* FIX 4: captainLocation added + pickupLocation cleaned with
+                toCoords (same as user Home) */}
             <LiveTracking
                 role="captain"
-                tracking={showLiveTracking && Boolean(ride)}
-                pickupLocation={
-                    ride?.pickupCoordinates
-                        ? [
-                            ride.pickupCoordinates.ltd,
-                            ride.pickupCoordinates.lng
-                        ]
-                        : null
-                }
+                tracking={isTracking}
+                captainLocation={isTracking ? captainPosition : null}
+                pickupLocation={toCoords(
+                    ride?.pickupCoordinates?.ltd,
+                    ride?.pickupCoordinates?.lng
+                )}
                 pickupAddress={ride?.pickup}
             />
 
@@ -857,9 +889,7 @@ const CaptainHome = () => {
                 `}
             >
 
-                {/* =================================================
-                    DRAG / EXPAND BUTTON
-                ================================================== */}
+                {/* DRAG / EXPAND BUTTON */}
                 <button
                     type="button"
                     onClick={() => setExpanded(v => !v)}
@@ -896,14 +926,10 @@ const CaptainHome = () => {
                 </button>
 
 
-                {/* =================================================
-                    DASHBOARD CONTENT
-                ================================================== */}
+                {/* DASHBOARD CONTENT */}
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-2 sm:px-8">
 
-                    {/* =================================================
-                        HEADING
-                    ================================================== */}
+                    {/* HEADING */}
                     <div className="mb-4 flex items-center gap-3">
 
                         <span className="h-7 w-2 rounded-full bg-[#F15A24]" />
@@ -915,9 +941,7 @@ const CaptainHome = () => {
                     </div>
 
 
-                    {/* =================================================
-                        ACTIVE RIDE
-                    ================================================== */}
+                    {/* ACTIVE RIDE */}
                     {showLiveTracking && ride && (
 
                         <div className="mb-3 rounded-xl bg-[#F15A24]/10 p-4 ring-1 ring-[#F15A24]/30">
@@ -970,14 +994,10 @@ const CaptainHome = () => {
                     )}
 
 
-                    {/* =================================================
-                        MAIN DASHBOARD GRID
-                    ================================================== */}
+                    {/* MAIN DASHBOARD GRID */}
                     <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
 
-                        {/* =================================================
-                            ONLINE / OFFLINE
-                        ================================================== */}
+                        {/* ONLINE / OFFLINE */}
                         <div
                             className={`
                                 flex
@@ -1093,13 +1113,7 @@ const CaptainHome = () => {
                         </div>
 
 
-                        {/* =================================================
-                            DYNAMIC CAPTAIN STATS
-                            Trips
-                            Today's Earnings
-                            Total Earnings
-                            Rating
-                        ================================================== */}
+                        {/* DYNAMIC CAPTAIN STATS */}
                         <div className="md:col-span-2 lg:col-span-2">
 
                             <CaptainStats />
@@ -1109,9 +1123,7 @@ const CaptainHome = () => {
                     </div>
 
 
-                    {/* =================================================
-                        CAPTAIN DETAILS
-                    ================================================== */}
+                    {/* CAPTAIN DETAILS */}
                     <div className="mt-3">
 
                         <CaptainDetails />
@@ -1125,9 +1137,7 @@ const CaptainHome = () => {
         </div>
 
 
-        {/* =========================================================
-            DIM BACKDROP
-        ========================================================== */}
+        {/* DIM BACKDROP */}
         <div
             aria-hidden="true"
             className={`
@@ -1146,9 +1156,7 @@ const CaptainHome = () => {
         />
 
 
-        {/* =========================================================
-            RIDE REQUEST POPUP
-        ========================================================== */}
+        {/* RIDE REQUEST POPUP */}
         <div
             aria-hidden={!ridePopupPanel}
             className={`
@@ -1177,9 +1185,7 @@ const CaptainHome = () => {
         </div>
 
 
-        {/* =========================================================
-            CONFIRM RIDE / OTP POPUP
-        ========================================================== */}
+        {/* CONFIRM RIDE / OTP POPUP */}
         <div
             aria-hidden={!confirmRidePopupPanel}
             className={`
@@ -1212,9 +1218,7 @@ const CaptainHome = () => {
         </div>
 
 
-        {/* =========================================================
-            PAST RIDES SHEET
-        ========================================================== */}
+        {/* PAST RIDES SHEET */}
         {historyOpen && (
             <RideHistory
                 role="captain"
