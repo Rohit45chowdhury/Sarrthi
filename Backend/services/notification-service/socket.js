@@ -364,48 +364,61 @@ function initializeSocket(server) {
         });
 
 
+
         // ==================================================
-        // CAPTAIN LIVE LOCATION -> PASSENGER (ride ongoing)
+        // USER LIVE LOCATION -> CAPTAIN (ride ongoing)
         // ==================================================
 
-        socket.on('captain-live-location', async (data) => {
-
+        socket.on('user-live-location', async (data) => {
             try {
-                if (socket.data.userType !== 'captain' || !socket.data.userId) {
-                    return emitError(socket, 'Join as a captain first');
+                if (socket.data.userType !== 'user' || !socket.data.userId) {
+                    return emitError(socket, 'Join as a user first');
                 }
 
                 const ltd = toCoord(data?.location?.ltd);
                 const lng = toCoord(data?.location?.lng);
+                const rideId = String(data?.rideId || '');
 
                 if (!isValidLatLng(ltd, lng)) {
-                    return emitError(socket, 'Invalid location data');
+                    return emitError(socket, 'Invalid user location');
                 }
 
-                const rideId = data?.rideId;
-
-                if (!OBJECT_ID.test(String(rideId || ''))) return;
-
-                const tracked = await getTracked(socket, socket.data.userId);
-
-                if (
-                    !tracked ||
-                    tracked.phase !== 'ongoing' ||
-                    tracked.rideId !== String(rideId)
-                ) {
+                if (!OBJECT_ID.test(rideId)) {
                     return;
                 }
 
-                emitToUser(tracked.userId, 'captain-location', {
-                    rideId: tracked.rideId,
+                // Find the tracked ride belonging to this user.
+                // Do not trust the userId supplied by the frontend.
+                let matchingCaptainId = null;
+                let matchingRide = null;
+
+                for (const [captainId, tracked] of trackedRides.entries()) {
+                    if (
+                        tracked.userId === String(socket.data.userId) &&
+                        tracked.rideId === rideId &&
+                        tracked.phase === 'ongoing'
+                    ) {
+                        matchingCaptainId = captainId;
+                        matchingRide = tracked;
+                        break;
+                    }
+                }
+
+                if (!matchingCaptainId || !matchingRide) {
+                    return;
+                }
+
+                emitToCaptain(matchingCaptainId, 'user-live-location', {
+                    rideId: matchingRide.rideId,
                     lat: ltd,
                     lng
                 });
 
             } catch (error) {
-                console.error('Live location relay error:', error);
+                console.error('User live location relay error:', error);
             }
         });
+
 
 
         // ==================================================

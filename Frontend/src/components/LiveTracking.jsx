@@ -1,1096 +1,516 @@
+
 import React, {
-    useContext,
-    useEffect,
-    useMemo,
-    useRef,
-    useState
-} from 'react'
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 
 import {
-    MapContainer,
-    TileLayer,
-    Marker,
-    Popup,
-    Polyline,
-    useMap,
-    useMapEvents
-} from 'react-leaflet'
+  MapContainer,
+  TileLayer,
+  Marker,
+  Popup,
+  Polyline,
+  useMap
+} from 'react-leaflet';
 
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
-import { SocketContext } from '../context/SocketContext'
+const OSRM_URL = 'https://router.project-osrm.org/route/v1/driving';
 
+const FALLBACK_CENTER = [22.5726, 88.3639];
 
-// ================= FIX LEAFLET ICON =================
-
-delete L.Icon.Default.prototype._getIconUrl
-
-L.Icon.Default.mergeOptions({
-    iconRetinaUrl:
-        'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
-
-    iconUrl:
-        'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
-
-    shadowUrl:
-        'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png'
-})
-
-
-// ================= CUSTOM ICONS =================
+// ---------------- ICONS ----------------
 
 const captainIcon = new L.DivIcon({
-    className: 'captain-live-marker',
+  className: '',
+  html: '<div style="font-size:28px">🚕</div>',
+  iconSize: [36, 36],
+  iconAnchor: [18, 18]
+});
 
-    html: `
-        <div style="
-            width: 44px;
-            height: 44px;
-            background: #12334A;
-            border: 3px solid white;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            color: white;
-            font-size: 22px;
-        ">
-            🚗
-        </div>
-    `,
+const userIcon = new L.DivIcon({
+  className: '',
+  html: '<div style="font-size:28px">📍</div>',
+  iconSize: [36, 36],
+  iconAnchor: [18, 18]
+});
 
-    iconSize: [44, 44],
-    iconAnchor: [22, 22]
-})
+// ---------------- NORMALIZE LOCATION ----------------
 
-// pickup / passenger marker (orange, so it is different from the captain)
-const pickupIcon = new L.DivIcon({
-    className: 'pickup-live-marker',
+// Supports:
+// [lat, lng]
+// { lat, lng }
+// { latitude, longitude }
+// { ltd, lng }
+// { location: { lat, lng } }
 
-    html: `
-        <div style="
-            width: 44px;
-            height: 44px;
-            background: #F15A24;
-            border: 3px solid white;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            color: white;
-            font-size: 22px;
-        ">
-            👤
-        </div>
-    `,
+function normalizePoint(point) {
+  if (!point) return null;
 
-    iconSize: [44, 44],
-    iconAnchor: [22, 22]
-})
+  if (
+    typeof point === 'object' &&
+    !Array.isArray(point) &&
+    point.location
+  ) {
+    const nested = normalizePoint(point.location);
 
+    if (nested) return nested;
+  }
 
-// ================= CONFIG =================
+  let lat;
+  let lng;
 
-const OSRM_URL = 'https://router.project-osrm.org/route/v1/driving'
-const NOMINATIM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search'
+  if (Array.isArray(point) && point.length >= 2) {
+    [lat, lng] = point;
+  } else if (typeof point === 'object') {
+    lat = point.lat ?? point.latitude ?? point.ltd;
+    lng = point.lng ?? point.longitude;
+  } else {
+    return null;
+  }
 
-// OSRM throttling:
-//  - always recalculate when captain (or pickup) moved >= 25 m
-//  - or when moved >= 5 m AND at least 10 s passed since the last request
-//  - after a failed request, retry automatically every 10 s
-const ROUTE_MIN_MOVE_M = 25
-const ROUTE_SMALL_MOVE_M = 5
-const ROUTE_MIN_INTERVAL_MS = 10000
+  if (
+    lat === null ||
+    lat === undefined ||
+    lng === null ||
+    lng === undefined
+  ) {
+    return null;
+  }
 
-// pickup address -> [lat, lng], so the same address is geocoded only once
-const geocodeCache = new Map()
+  lat = Number(lat);
+  lng = Number(lng);
 
+  if (
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lng) ||
+    Math.abs(lat) > 90 ||
+    Math.abs(lng) > 180
+  ) {
+    return null;
+  }
 
-// ================= HELPERS =================
-
-// Number(null) is 0, which would put a marker at 0,0 -> reject null/''.
-const toNum = value =>
-    value === null || value === undefined || value === ''
-        ? NaN
-        : Number(value)
-
-const toPoint = (lat, lng) => {
-
-    const a = toNum(lat)
-    const b = toNum(lng)
-
-    return Number.isFinite(a) && Number.isFinite(b)
-        ? [a, b]
-        : null
+  return [lat, lng];
 }
 
-// A long address (full Nominatim display_name, often with Bengali names)
-// frequently finds nothing. Same fallbacks the backend geocoder uses:
-// original -> without Bengali script -> most specific parts -> locality part.
-const buildQueries = original => {
+// ---------------- STRAIGHT-LINE DISTANCE ----------------
 
-    const parts = original
-        .split(',')
-        .map(p => p.replace(/[\u0980-\u09FF]+/g, '').trim())
-        .filter(Boolean)
+function distanceMeters(a, b) {
+  if (!a || !b) return null;
 
-    const queries = [
-        original,
-        parts.join(', '),
-        parts.slice(0, 3).join(', '),
-        parts.slice(-4).join(', ')
-    ]
+  const toRadians = value => (value * Math.PI) / 180;
 
-    return [...new Set(queries.filter(Boolean))]
+  const [lat1, lng1] = a;
+  const [lat2, lng2] = b;
+
+  const dLat = toRadians(lat2 - lat1);
+  const dLng = toRadians(lng2 - lng1);
+
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLng / 2) ** 2;
+
+  return (
+    6371000 *
+    2 *
+    Math.atan2(
+      Math.sqrt(h),
+      Math.sqrt(Math.max(0, 1 - h))
+    )
+  );
 }
 
-// haversine, metres. points are [lat, lng]
-const distanceMeters = (a, b) => {
+// ---------------- MAP AUTO-POSITIONING ----------------
 
-    const R = 6371000
-    const rad = deg => (deg * Math.PI) / 180
+function FitPoints({ points }) {
+  const map = useMap();
+  const initializedRef = useRef(false);
 
-    const dLat = rad(b[0] - a[0])
-    const dLng = rad(b[1] - a[1])
+  useEffect(() => {
+    if (!points.length) return;
 
-    const h =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos(rad(a[0])) *
-        Math.cos(rad(b[0])) *
-        Math.sin(dLng / 2) ** 2
-
-    return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
-}
-
-const formatDistance = meters =>
-    meters < 1000
-        ? `${Math.round(meters)} m`
-        : `${(meters / 1000).toFixed(1)} km`
-
-const formatDuration = seconds => {
-
-    const totalMinutes = Math.max(1, Math.round(seconds / 60))
-
-    if (totalMinutes < 60) return `${totalMinutes} min`
-
-    const hours = Math.floor(totalMinutes / 60)
-    const minutes = totalMinutes % 60
-
-    return minutes ? `${hours} h ${minutes} min` : `${hours} h`
-}
-
-
-// ================= MAP CONTROLLER =================
-// Used only when NOT tracking (old behaviour). Depends on plain numbers (not an
-// array), so the effect runs only when the position really changes. panTo
-// keeps the user's current zoom level.
-
-const MapController = ({ target }) => {
-
-    const map = useMap()
-
-    const lat = target?.[0]
-    const lng = target?.[1]
-
-    useEffect(() => {
-
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
-
-        map.panTo([lat, lng], {
-            animate: true,
-            duration: 0.5
-        })
-
-    }, [lat, lng, map])
-
-    return null
-}
-
-
-// ================= FIT ROUTE (tracking only) =================
-// Fits captain + pickup + route inside the visible part of the map.
-// Bottom padding is large because the bottom sheets cover the lower part
-// of the screen, top padding keeps the route clear of the info card.
-
-const FitRoute = ({ pointsRef, fitKey, paused }) => {
-
-    const map = useMap()
-
-    useEffect(() => {
-
-        if (paused) return
-
-        const points = pointsRef.current
-
-        if (!points || points.length === 0) return
-
-        if (points.length === 1) {
-            map.setView(points[0], 16, { animate: true })
-            return
-        }
-
-        const height = map.getSize().y
-
-        const top = Math.min(150, Math.round(height * 0.25))
-        const bottom = Math.max(
-            40,
-            Math.min(Math.round(height * 0.45), height - top - 100)
-        )
-
+    if (!initializedRef.current) {
+      if (points.length === 1) {
+        map.setView(points[0], 16);
+      } else {
         map.fitBounds(L.latLngBounds(points), {
-            paddingTopLeft: [40, top],
-            paddingBottomRight: [40, bottom],
-            maxZoom: 17,
-            animate: true
-        })
+          padding: [55, 55],
+          maxZoom: 16
+        });
+      }
 
-    }, [fitKey, paused, map, pointsRef])
-
-    return null
-}
-
-
-// pauses auto-fit as soon as the person drags the map themselves
-const UserMoveWatcher = ({ onMove }) => {
-
-    useMapEvents({
-        dragstart: onMove
-    })
-
-    return null
-}
-
-
-// ================= TRACKING INFO CARD =================
-
-const TrackingCard = ({
-    role,
-    hasCaptain,
-    hasPickup,
-    geocodeStatus,
-    route,
-    routeError,
-    gpsError,
-    socketConnected,
-    autoFit,
-    onRecenter
-}) => {
-
-    // what to say while there is no route yet
-    let status = null
-
-    if (!hasCaptain) {
-
-        status =
-            role === 'captain'
-                ? {
-                    text: gpsError || 'Getting your location...',
-                    loading: !gpsError
-                }
-                : {
-                    text: 'Waiting for captain location...',
-                    loading: true
-                }
-
-    } else if (!hasPickup) {
-
-        // 'idle' = the ride has no pickup address and no coordinates,
-        // so there is nothing to wait for
-        status =
-            geocodeStatus === 'error' || geocodeStatus === 'idle'
-                ? {
-                    text: 'Unable to find the pickup point on the map.',
-                    loading: false
-                }
-                : {
-                    text: 'Locating pickup point...',
-                    loading: true
-                }
-
-    } else if (!route) {
-
-        status = routeError
-            ? { text: routeError, loading: false }
-            : { text: 'Calculating route...', loading: true }
+      initializedRef.current = true;
+      return;
     }
 
-    return (
+    const bounds = map.getBounds();
 
-        <div className="pointer-events-none absolute inset-x-0 top-[4.75rem] z-[1000] flex justify-center px-4 sm:top-24">
+    const outside = points.some(point => !bounds.contains(point));
 
-            <div className="pointer-events-auto w-full max-w-md rounded-2xl bg-white p-4 shadow-lg">
+    if (outside) {
+      if (points.length === 1) {
+        map.panTo(points[0], { animate: true });
+      } else {
+        map.fitBounds(L.latLngBounds(points), {
+          padding: [55, 55],
+          maxZoom: 16,
+          animate: true
+        });
+      }
+    }
+  }, [map, points]);
 
-                {/* header */}
-                <div className="flex items-center justify-between gap-3">
+  return null;
+}
 
-                    <div className="flex min-w-0 items-center gap-2">
-                        <span className="h-5 w-1.5 shrink-0 rounded-full bg-[#F15A24]" />
-                        <h3 className="truncate font-bold text-[#12334A]">
-                            {role === 'captain'
-                                ? 'Head to pickup'
-                                : 'Your captain is on the way'}
-                        </h3>
-                    </div>
+// ---------------- MAIN COMPONENT ----------------
 
-                    {/* shown only after the person moved the map */}
-                    {!autoFit && (
-                        <button
-                            type="button"
-                            onClick={onRecenter}
-                            aria-label="Fit route on screen"
-                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-[#12334A] transition-colors hover:bg-[#F15A24] hover:text-white"
-                        >
-                            <i className="text-lg ri-focus-3-line" />
-                        </button>
-                    )}
+export default function LiveTracking({
+  role = 'user',
+  captainLocation = null,
+  userLocation = null
+}) {
+  const [myPosition, setMyPosition] = useState(null);
+  const [gpsError, setGpsError] = useState('');
 
-                </div>
+  const [route, setRoute] = useState([]);
+  const [routeDistance, setRouteDistance] = useState(null);
+  const [routeDuration, setRouteDuration] = useState(null);
+  const [routeError, setRouteError] = useState('');
 
-                {/* socket disconnected */}
-                {!socketConnected && (
-                    <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
-                        Connection lost. Reconnecting...
-                    </p>
-                )}
+  const lastRoutedPointsRef = useRef(null);
+  const latestPointsRef = useRef({
+    captainPoint: null,
+    userPoint: null
+  });
 
-                {/* status OR distance + ETA */}
-                {status ? (
+  const routeRequestRef = useRef(null);
 
-                    <p
-                        className={`mt-3 flex items-center gap-2 text-sm ${
-                            status.loading ? 'text-gray-500' : 'text-red-500'
-                        }`}
-                    >
-                        {status.loading && (
-                            <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-gray-300 border-t-[#F15A24]" />
-                        )}
-                        {status.text}
-                    </p>
+  // ---------------- CURRENT DEVICE GPS ----------------
 
-                ) : (
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setGpsError('This browser does not support GPS location.');
+      return;
+    }
 
-                    <>
-                        <div className="mt-3 grid grid-cols-2 gap-2">
+    const watchId = navigator.geolocation.watchPosition(
+      position => {
+        setMyPosition([
+          position.coords.latitude,
+          position.coords.longitude
+        ]);
 
-                            <div className="flex items-center gap-3 rounded-xl bg-gray-100 px-3 py-2.5">
-                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
-                                    <i className="text-lg ri-route-line" />
-                                </div>
-                                <div className="min-w-0">
-                                    <p className="text-xs text-gray-500">Distance</p>
-                                    <p className="truncate text-lg font-bold leading-tight text-[#12334A]">
-                                        {formatDistance(route.distance)}
-                                    </p>
-                                </div>
-                            </div>
+        setGpsError('');
+      },
+      error => {
+        console.warn('GPS error:', error.message);
 
-                            <div className="flex items-center gap-3 rounded-xl bg-gray-100 px-3 py-2.5">
-                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#F15A24]/10 text-[#F15A24]">
-                                    <i className="text-lg ri-time-line" />
-                                </div>
-                                <div className="min-w-0">
-                                    <p className="text-xs text-gray-500">Time</p>
-                                    <p className="truncate text-lg font-bold leading-tight text-[#12334A]">
-                                        {formatDuration(route.duration)}
-                                    </p>
-                                </div>
-                            </div>
+        if (error.code === 1) {
+          setGpsError(
+            'Location permission denied. Allow location access in your browser.'
+          );
+        } else if (error.code === 2) {
+          setGpsError(
+            'Your device location is unavailable. Check your GPS.'
+          );
+        } else if (error.code === 3) {
+          setGpsError(
+            'GPS request timed out. Waiting for another location update.'
+          );
+        } else {
+          setGpsError('Unable to get your current device location.');
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 2000,
+        timeout: 15000
+      }
+    );
 
-                        </div>
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, []);
 
-                        {routeError && (
-                            <p className="mt-2 text-xs text-amber-600">
-                                Couldn't refresh the route. Showing the last known route.
-                            </p>
-                        )}
-                    </>
-                )}
+  // ---------------- CAPTAIN LOCATION ----------------
 
-            </div>
+  // On captain screen, current device = captain.
+  // On user screen, captain location comes from Socket.IO.
 
+  const captainPoint = useMemo(() => {
+    return role === 'captain'
+      ? normalizePoint(myPosition)
+      : normalizePoint(captainLocation);
+  }, [role, myPosition, captainLocation]);
+
+  // ---------------- USER LOCATION ----------------
+
+  // On user screen, current device = user.
+  // On captain screen, user location comes from Socket.IO.
+
+  const userPoint = useMemo(() => {
+    return role === 'captain'
+      ? normalizePoint(userLocation)
+      : normalizePoint(myPosition);
+  }, [role, userLocation, myPosition]);
+
+  // Keep latest points available to the route polling effect.
+  latestPointsRef.current = {
+    captainPoint,
+    userPoint
+  };
+
+  // ---------------- MAP POINTS ----------------
+
+  const points = useMemo(() => {
+    return [captainPoint, userPoint].filter(Boolean);
+  }, [captainPoint, userPoint]);
+
+  // ---------------- STRAIGHT-LINE DISTANCE ----------------
+
+  const straightDistance = useMemo(() => {
+    return distanceMeters(captainPoint, userPoint);
+  }, [captainPoint, userPoint]);
+
+  // ---------------- ROAD ROUTE ----------------
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchRoute = async () => {
+      const {
+        captainPoint: captain,
+        userPoint: user
+      } = latestPointsRef.current;
+
+      // Both locations are required for a road route.
+      if (!captain || !user) {
+        lastRoutedPointsRef.current = null;
+
+        setRoute([]);
+        setRouteDistance(null);
+        setRouteDuration(null);
+        setRouteError('');
+
+        return;
+      }
+
+      const previous = lastRoutedPointsRef.current;
+
+      const captainMoved =
+        !previous ||
+        distanceMeters(previous.captain, captain) >= 50;
+
+      const userMoved =
+        !previous ||
+        distanceMeters(previous.user, user) >= 50;
+
+      // Avoid unnecessary route API calls.
+      if (!captainMoved && !userMoved) return;
+
+      // Do not start overlapping requests.
+      if (routeRequestRef.current) return;
+
+      const controller = new AbortController();
+
+      routeRequestRef.current = controller;
+
+      try {
+        const [captainLat, captainLng] = captain;
+        const [userLat, userLng] = user;
+
+        // OSRM requires longitude,latitude coordinate order.
+        const url =
+          `${OSRM_URL}/${captainLng},${captainLat};${userLng},${userLat}` +
+          '?overview=full&geometries=geojson';
+
+        const response = await fetch(url, {
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            `Route request failed (${response.status})`
+          );
+        }
+
+        const data = await response.json();
+        const result = data.routes?.[0];
+
+        if (!result || !result.geometry?.coordinates?.length) {
+          throw new Error('No driving route found');
+        }
+
+        if (!isMounted) return;
+
+        const routeCoordinates =
+          result.geometry.coordinates.map(([lng, lat]) => [
+            lat,
+            lng
+          ]);
+
+        setRoute(routeCoordinates);
+        setRouteDistance(result.distance);
+        setRouteDuration(result.duration);
+        setRouteError('');
+
+        lastRoutedPointsRef.current = {
+          captain: [...captain],
+          user: [...user]
+        };
+      } catch (error) {
+        if (
+          error.name !== 'AbortError' &&
+          isMounted
+        ) {
+          console.warn('Route error:', error.message);
+
+          setRouteError(
+            'Road route is temporarily unavailable.'
+          );
+
+          // Keep the last successful route visible.
+        }
+      } finally {
+        if (routeRequestRef.current === controller) {
+          routeRequestRef.current = null;
+        }
+      }
+    };
+
+    // First route attempt.
+    const initialTimer = setTimeout(fetchRoute, 500);
+
+    // Check for significant movement every five seconds.
+    const interval = setInterval(fetchRoute, 5000);
+
+    return () => {
+      isMounted = false;
+
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+
+      routeRequestRef.current?.abort();
+      routeRequestRef.current = null;
+    };
+  }, []);
+
+  // ---------------- FORMAT DISTANCE ----------------
+
+  const formatDistance = meters => {
+    if (meters == null) return 'Calculating...';
+
+    if (meters < 1000) {
+      return `${Math.round(meters)} m`;
+    }
+
+    return `${(meters / 1000).toFixed(2)} km`;
+  };
+
+  // ---------------- UI ----------------
+
+  return (
+    <div className="relative w-full h-full min-h-[300px]">
+      {/* Distance and status panel */}
+      <div className="absolute z-[1000] top-3 left-3 right-3 bg-white rounded-xl shadow-md p-3">
+        <div className="font-semibold text-gray-900">
+          Captain ↔ User
         </div>
-    )
-}
 
-
-// ================= LIVE TRACKING =================
-/*
-    Props (all optional, without them the component behaves as before):
-
-    captainLocation  [lat, lng] | null   captain position (user side, from socket)
-    pickupLocation   [lat, lng] | null   pickup coordinates if you already have them
-    pickupAddress    string              used when pickupLocation is not given
-                                         (geocoded once with Nominatim)
-    role             'user' | 'captain'  who is looking at the map
-                                         captain -> captain point = own GPS
-                                         user    -> captain point = captainLocation
-    tracking         boolean             true after the captain accepted the ride
-*/
-
-const LiveTracking = ({
-    captainLocation = null,
-    pickupLocation = null,
-    pickupAddress = '',
-    role = 'user',
-    tracking = false
-}) => {
-
-    const { socket } = useContext(SocketContext)
-
-    const [currentPosition, setCurrentPosition] = useState(null)
-
-    const [error, setError] = useState('')
-
-    const [socketConnected, setSocketConnected] = useState(true)
-
-    const [geocoded, setGeocoded] = useState({
-        address: '',
-        point: null,
-        status: 'idle'
-    })
-
-    const [route, setRoute] = useState(null)
-    const [routeError, setRouteError] = useState('')
-
-    const [autoFit, setAutoFit] = useState(true)
-
-    const mountedRef = useRef(false)
-    const abortRef = useRef(null)
-    const requestIdRef = useRef(0)
-
-    // after a failed OSRM request the route is retried automatically
-    const retryTimerRef = useRef(null)
-    const [retryTick, setRetryTick] = useState(0)
-
-    const lastRouteRef = useRef({
-        from: null,
-        to: null,
-        at: 0,
-        failed: false
-    })
-
-    const pointsRef = useRef([])
-
-
-    // ================= GET LIVE GPS =================
-
-    useEffect(() => {
-
-        if (!navigator.geolocation) {
-
-            setError('Geolocation is not supported by your browser.')
-
-            return
-        }
-
-        const watchId = navigator.geolocation.watchPosition(
-
-            (position) => {
-
-                const { latitude, longitude } = position.coords
-
-                // same coordinates -> keep the old array, no re-render
-                setCurrentPosition(prev =>
-                    prev &&
-                    prev[0] === latitude &&
-                    prev[1] === longitude
-                        ? prev
-                        : [latitude, longitude]
-                )
-
-                setError('')
-            },
-
-            (err) => {
-
-                console.error('GPS Error:', err.message)
-
-                switch (err.code) {
-
-                    case 1:
-                        setError('Location permission denied. Please allow location access.')
-                        break
-
-                    case 2:
-                        setError('Location information is unavailable.')
-                        break
-
-                    case 3:
-                        setError('Location request timed out.')
-                        break
-
-                    default:
-                        setError('Unable to get your location.')
-                }
-            },
-
-            {
-                enableHighAccuracy: true,
-                maximumAge: 0,
-                timeout: 20000
-            }
-        )
-
-        return () => {
-
-            navigator.geolocation.clearWatch(watchId)
-
-        }
-
-    }, [])
-
-
-    // ================= UNMOUNT: stop any running OSRM request =================
-
-    useEffect(() => {
-
-        mountedRef.current = true
-
-        return () => {
-            mountedRef.current = false
-            abortRef.current?.abort()
-            clearTimeout(retryTimerRef.current)
-        }
-
-    }, [])
-
-
-    // ================= SOCKET CONNECTION STATE (reuses the shared socket) =================
-
-    useEffect(() => {
-
-        if (!tracking || !socket) return
-
-        const handleConnect = () => setSocketConnected(true)
-        const handleDisconnect = () => setSocketConnected(false)
-
-        setSocketConnected(socket.connected)
-
-        socket.on('connect', handleConnect)
-        socket.on('disconnect', handleDisconnect)
-
-        return () => {
-            socket.off('connect', handleConnect)
-            socket.off('disconnect', handleDisconnect)
-        }
-
-    }, [tracking, socket])
-
-
-    // ================= VALIDATE CAPTAIN LOCATION =================
-
-    const capLat = toNum(captainLocation?.[0])
-    const capLng = toNum(captainLocation?.[1])
-
-    // useMemo -> same array reference until the numbers change
-    const validCaptainLocation = useMemo(
-        () =>
-            Number.isFinite(capLat) && Number.isFinite(capLng)
-                ? [capLat, capLng]
-                : null,
-        [capLat, capLng]
-    )
-
-
-    // ================= PICKUP POINT =================
-    // 1) pickupLocation prop  2) geocoded pickupAddress  3) (user only) own GPS
-
-    const provLat = toNum(pickupLocation?.[0])
-    const provLng = toNum(pickupLocation?.[1])
-
-    const providedPickup = useMemo(
-        () =>
-            Number.isFinite(provLat) && Number.isFinite(provLng)
-                ? [provLat, provLng]
-                : null,
-        [provLat, provLng]
-    )
-
-    const address = String(pickupAddress || '').trim()
-
-    useEffect(() => {
-
-        if (!tracking || providedPickup || !address) return
-
-        const cached = geocodeCache.get(address)
-
-        if (cached) {
-            setGeocoded({ address, point: cached, status: 'done' })
-            return
-        }
-
-        setGeocoded({ address, point: null, status: 'loading' })
-
-        const controller = new AbortController()
-
-        const lookup = async () => {
-
-            const queries = buildQueries(address)
-
-            for (let i = 0; i < queries.length; i++) {
-
-                const res = await fetch(
-                    `${NOMINATIM_SEARCH_URL}?format=json&limit=1&countrycodes=in&q=${encodeURIComponent(queries[i])}`,
-                    {
-                        signal: controller.signal,
-                        headers: { 'Accept-Language': 'en' }
-                    }
-                )
-
-                if (!res.ok) throw new Error(`Geocoding failed (${res.status})`)
-
-                const list = await res.json()
-
-                const point = toPoint(list?.[0]?.lat, list?.[0]?.lon)
-
-                if (point) return point
-
-                // Nominatim public server allows about 1 request per second
-                if (i < queries.length - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 1100))
-                }
-            }
-
-            throw new Error('Pickup address not found')
-        }
-
-        lookup()
-            .then(point => {
-
-                geocodeCache.set(address, point)
-
-                setGeocoded({ address, point, status: 'done' })
-            })
-            .catch(err => {
-
-                if (err.name === 'AbortError') return
-
-                console.error('Pickup geocode error:', err.message)
-
-                setGeocoded({ address, point: null, status: 'error' })
-            })
-
-        return () => controller.abort()
-
-    }, [tracking, providedPickup, address])
-
-    // ignore a result that belongs to an older address
-    const geocodeStatus =
-        geocoded.address === address
-            ? geocoded.status
-            : address
-                ? 'loading'
-                : 'idle'
-
-    let pickupPoint = null
-
-    if (providedPickup) {
-        pickupPoint = providedPickup
-    } else if (geocodeStatus === 'done') {
-        pickupPoint = geocoded.point
-    } else if (
-        role === 'user' &&
-        (geocodeStatus === 'error' || !address)
-    ) {
-        pickupPoint = currentPosition
-    }
-
-    const captainPoint =
-        role === 'captain' ? currentPosition : validCaptainLocation
-
-    const cLat = captainPoint?.[0]
-    const cLng = captainPoint?.[1]
-    const pLat = pickupPoint?.[0]
-    const pLng = pickupPoint?.[1]
-
-    const hasBoth =
-        Number.isFinite(cLat) &&
-        Number.isFinite(cLng) &&
-        Number.isFinite(pLat) &&
-        Number.isFinite(pLng)
-
-
-    // ================= RESET WHEN TRACKING STOPS =================
-
-    useEffect(() => {
-
-        if (tracking) return
-
-        requestIdRef.current++
-        abortRef.current?.abort()
-        clearTimeout(retryTimerRef.current)
-
-        lastRouteRef.current = {
-            from: null,
-            to: null,
-            at: 0,
-            failed: false
-        }
-
-        setRoute(null)
-        setRouteError('')
-        setAutoFit(true)
-
-    }, [tracking])
-
-
-    // ================= OSRM ROUTE (throttled) =================
-    // OSRM wants  longitude,latitude  - Leaflet wants  latitude,longitude.
-    // Request: captain -> pickup. Response coordinates are converted back.
-
-    useEffect(() => {
-
-        if (!tracking || !hasBoth) return
-
-        const from = [cLat, cLng]
-        const to = [pLat, pLng]
-
-        const last = lastRouteRef.current
-
-        if (last.from) {
-
-            const elapsed = Date.now() - last.at
-
-            const moved = distanceMeters(from, last.from)
-            const pickupMoved = distanceMeters(to, last.to)
-
-            const needed = last.failed
-                ? elapsed >= ROUTE_MIN_INTERVAL_MS
-                : pickupMoved >= ROUTE_MIN_MOVE_M ||
-                  moved >= ROUTE_MIN_MOVE_M ||
-                  (moved >= ROUTE_SMALL_MOVE_M &&
-                      elapsed >= ROUTE_MIN_INTERVAL_MS)
-
-            if (!needed) return
-        }
-
-        const requestId = ++requestIdRef.current
-
-        // stop the previous request and any pending retry
-        abortRef.current?.abort()
-        clearTimeout(retryTimerRef.current)
-
-        const controller = new AbortController()
-        abortRef.current = controller
-
-        lastRouteRef.current = {
-            from,
-            to,
-            at: Date.now(),
-            failed: false
-        }
-
-        fetch(
-            `${OSRM_URL}/${cLng},${cLat};${pLng},${pLat}?overview=full&geometries=geojson`,
-            { signal: controller.signal }
-        )
-            .then(res => {
-
-                if (!res.ok) throw new Error(`OSRM error (${res.status})`)
-
-                return res.json()
-            })
-            .then(data => {
-
-                if (
-                    !mountedRef.current ||
-                    requestId !== requestIdRef.current
-                ) return
-
-                const best = data?.routes?.[0]
-
-                if (
-                    data?.code !== 'Ok' ||
-                    !best?.geometry?.coordinates?.length
-                ) {
-                    throw new Error('No route found')
-                }
-
-                // GeoJSON [lng, lat] -> Leaflet [lat, lng]
-                const coords = best.geometry.coordinates.map(
-                    ([lng, lat]) => [lat, lng]
-                )
-
-                setRoute({
-                    id: requestId,
-                    coords,
-                    distance: best.distance,   // metres
-                    duration: best.duration    // seconds
-                })
-
-                setRouteError('')
-            })
-            .catch(err => {
-
-                if (err.name === 'AbortError') return
-
-                if (
-                    !mountedRef.current ||
-                    requestId !== requestIdRef.current
-                ) return
-
-                console.error('OSRM route error:', err.message)
-
-                lastRouteRef.current.failed = true
-
-                setRouteError('Unable to calculate the route right now.')
-
-                // try again in 10 s even if the captain is standing still
-                clearTimeout(retryTimerRef.current)
-
-                retryTimerRef.current = setTimeout(
-                    () => setRetryTick(t => t + 1),
-                    ROUTE_MIN_INTERVAL_MS
-                )
-            })
-
-    }, [tracking, hasBoth, cLat, cLng, pLat, pLng, retryTick])
-
-
-    // ================= MAP CENTER (initial) =================
-
-    const mapCenter =
-        (tracking ? pickupPoint || captainPoint : null) ||
-        validCaptainLocation ||
-        currentPosition
-
-
-    // ================= FIT DATA =================
-
-    const fitPoints = route
-        ? route.coords
-        : [captainPoint, pickupPoint].filter(Boolean)
-
-    pointsRef.current = fitPoints
-
-    const fitKey = route
-        ? `route-${route.id}`
-        : `points-${fitPoints.length}`
-
-
-    // ================= LOADING =================
-
-    if (!mapCenter) {
-
-        return (
-            <div className="absolute inset-0 flex items-center justify-center bg-gray-100 p-5">
-
-                <div className="text-center">
-
-                    <div className="mx-auto mb-4 h-9 w-9 animate-spin rounded-full border-4 border-gray-300 border-t-[#F15A24]" />
-
-                    <p className="font-medium text-[#12334A]">
-                        Getting live location...
-                    </p>
-
-                    {error && (
-                        <p className="mt-2 text-sm text-red-500">
-                            {error}
-                        </p>
-                    )}
-
-                </div>
-
-            </div>
-        )
-    }
-
-
-    // ================= MAP =================
-
-    return (
-
-        <div className="absolute inset-0 z-0 h-full w-full">
-
-            <MapContainer
-                center={mapCenter}
-                zoom={16}
-                scrollWheelZoom={true}
-                zoomControl={false}
-                className="h-full w-full"
-            >
-
-                <TileLayer
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                />
-
-
-                {/* ===== NORMAL MODE (before a ride is accepted) ===== */}
-
-                {!tracking && <MapController target={mapCenter} />}
-
-
-                {/* USER CURRENT LOCATION */}
-
-                {!tracking && currentPosition && (
-
-                    <Marker position={currentPosition}>
-
-                        <Popup>
-
-                            <div className="text-center">
-
-                                <strong>Your Location</strong>
-
-                                <br />
-
-                                You are here.
-
-                            </div>
-
-                        </Popup>
-
-                    </Marker>
-
-                )}
-
-
-                {/* CAPTAIN LIVE LOCATION */}
-
-                {!tracking && validCaptainLocation && (
-
-                    <Marker
-                        position={validCaptainLocation}
-                        icon={captainIcon}
-                    >
-
-                        <Popup>
-
-                            <div className="text-center">
-
-                                <strong>Saarthi Captain</strong>
-
-                                <br />
-
-                                Live location
-
-                            </div>
-
-                        </Popup>
-
-                    </Marker>
-
-                )}
-
-
-                {/* ===== TRACKING MODE (ride accepted) ===== */}
-
-                {tracking && (
-                    <>
-                        <UserMoveWatcher onMove={() => setAutoFit(false)} />
-
-                        <FitRoute
-                            pointsRef={pointsRef}
-                            fitKey={fitKey}
-                            paused={!autoFit}
-                        />
-                    </>
-                )}
-
-                {/* ROUTE: white casing + navy line so it stays visible on any map colour */}
-
-                {tracking && route && (
-                    <>
-                        <Polyline
-                            positions={route.coords}
-                            pathOptions={{
-                                color: '#ffffff',
-                                weight: 9,
-                                opacity: 0.9
-                            }}
-                        />
-
-                        <Polyline
-                            positions={route.coords}
-                            pathOptions={{
-                                color: '#12334A',
-                                weight: 5,
-                                opacity: 0.9
-                            }}
-                        />
-                    </>
-                )}
-
-
-                {/* PICKUP / USER */}
-
-                {tracking && pickupPoint && (
-
-                    <Marker position={pickupPoint} icon={pickupIcon}>
-
-                        <Popup>
-
-                            <div className="text-center">
-
-                                <strong>
-                                    {role === 'captain'
-                                        ? 'Pickup point'
-                                        : 'Your pickup'}
-                                </strong>
-
-                            </div>
-
-                        </Popup>
-
-                    </Marker>
-
-                )}
-
-
-                {/* CAPTAIN */}
-
-                {tracking && captainPoint && (
-
-                    <Marker position={captainPoint} icon={captainIcon}>
-
-                        <Popup>
-
-                            <div className="text-center">
-
-                                <strong>
-                                    {role === 'captain'
-                                        ? 'You'
-                                        : 'Saarthi Captain'}
-                                </strong>
-
-                                <br />
-
-                                Live location
-
-                            </div>
-
-                        </Popup>
-
-                    </Marker>
-
-                )}
-
-            </MapContainer>
-
-
-            {/* DISTANCE + ETA CARD */}
-
-            {tracking && (
-                <TrackingCard
-                    role={role}
-                    hasCaptain={Boolean(captainPoint)}
-                    hasPickup={Boolean(pickupPoint)}
-                    geocodeStatus={geocodeStatus}
-                    route={route}
-                    routeError={routeError}
-                    gpsError={error}
-                    socketConnected={socketConnected}
-                    autoFit={autoFit}
-                    onRecenter={() => setAutoFit(true)}
-                />
-            )}
-
+        <div className="text-sm text-gray-700">
+          Straight-line distance:{' '}
+          {formatDistance(straightDistance)}
         </div>
-    )
-}
 
-export default LiveTracking
+        {routeDistance !== null && (
+          <div className="text-sm text-gray-700">
+            Road distance: {formatDistance(routeDistance)}
+
+            {routeDuration !== null &&
+              ` · ${Math.max(
+                1,
+                Math.round(routeDuration / 60)
+              )} min`}
+          </div>
+        )}
+
+        {(!captainPoint || !userPoint) && (
+          <div className="text-xs text-amber-700 mt-1">
+            Waiting for both live GPS locations...
+          </div>
+        )}
+
+        {gpsError && (
+          <div className="text-xs text-red-600 mt-1">
+            {gpsError}
+          </div>
+        )}
+
+        {routeError && (
+          <div className="text-xs text-amber-700 mt-1">
+            {routeError}
+          </div>
+        )}
+      </div>
+
+      {/* Leaflet map */}
+      <MapContainer
+        center={FALLBACK_CENTER}
+        zoom={13}
+        scrollWheelZoom={true}
+        className="w-full h-full min-h-[300px] rounded-xl"
+      >
+        <TileLayer
+          attribution="&copy; OpenStreetMap contributors"
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+
+        {/* Captain marker */}
+        {captainPoint && (
+          <Marker
+            position={captainPoint}
+            icon={captainIcon}
+          >
+            <Popup>
+              Captain's current GPS location
+            </Popup>
+          </Marker>
+        )}
+
+        {/* User marker */}
+        {userPoint && (
+          <Marker
+            position={userPoint}
+            icon={userIcon}
+          >
+            <Popup>
+              User's current GPS location
+            </Popup>
+          </Marker>
+        )}
+
+        {/* Road route */}
+        {route.length > 0 && (
+          <Polyline
+            positions={route}
+            pathOptions={{
+              color: '#2563eb',
+              weight: 5,
+              opacity: 0.85
+            }}
+          />
+        )}
+
+        {/* Automatically position markers in view */}
+        <FitPoints points={points} />
+      </MapContainer>
+    </div>
+  );
+}
