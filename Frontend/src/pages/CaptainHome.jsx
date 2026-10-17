@@ -34,10 +34,17 @@ const LOCATION_SEND_MS = 5000
 //          map is visible behind it and after closing it.
 const OPEN_OTP_AFTER_CONFIRM = false
 
+// a request that nobody answered is removed from the bell list after this time
+// (set to 0 to disable). The server should still be the source of truth.
+const REQUEST_EXPIRY_MS = 60000
+
 const authHeaders = () => ({
     Authorization: `Bearer ${localStorage.getItem('token')}`,
     'Content-Type': 'application/json'
 })
+
+// the ride object from Mongo has `_id`, socket payloads may use `rideId`
+const getRideId = r => r?._id || r?.rideId
 
 // FIX 1: same helper as user Home.
 // Number(null) is 0 (would become 0,0 on the map) -> reject null/undefined/''
@@ -75,6 +82,10 @@ const CaptainHome = () => {
         useState(false)
 
     const [ride, setRide] = useState(null)
+
+    // queue of incoming ride requests (shown in the bell icon)
+    const [pendingRides, setPendingRides] = useState([])
+    const [notifOpen, setNotifOpen] = useState(false)
 
     // live tracking: opens after this captain confirmed a ride
     const [showLiveTracking, setShowLiveTracking] = useState(false)
@@ -120,6 +131,81 @@ const CaptainHome = () => {
             confirmRidePopupPanel || showLiveTracking
     }, [confirmRidePopupPanel, showLiveTracking])
 
+    // true while the ride request popup is open -> a new request waits
+    // in the bell list instead of replacing the one on screen
+    const ridePopupOpenRef = useRef(false)
+
+    useEffect(() => {
+        ridePopupOpenRef.current = ridePopupPanel
+    }, [ridePopupPanel])
+
+    // expiry timers for queued requests: { [rideId]: timeoutId }
+    const expiryTimersRef = useRef({})
+
+    /* ================= REQUEST QUEUE ================= */
+
+    const clearExpiryTimer = id => {
+
+        const key = String(id)
+
+        if (expiryTimersRef.current[key]) {
+            clearTimeout(expiryTimersRef.current[key])
+            delete expiryTimersRef.current[key]
+        }
+    }
+
+    const removePending = useCallback(id => {
+
+        if (!id) return
+
+        clearExpiryTimer(id)
+
+        setPendingRides(prev =>
+            prev.filter(r => String(getRideId(r)) !== String(id))
+        )
+    }, [])
+
+    const clearAllPending = useCallback(() => {
+
+        Object.values(expiryTimersRef.current).forEach(clearTimeout)
+        expiryTimersRef.current = {}
+
+        setPendingRides([])
+        setNotifOpen(false)
+    }, [])
+
+    // clear timers when the page closes
+    useEffect(() => {
+        return () => {
+            Object.values(expiryTimersRef.current).forEach(clearTimeout)
+        }
+    }, [])
+
+    // open one request from the bell list
+    const openRequest = r => {
+        setRide(r)
+        setNotifOpen(false)
+        setRidePopupPanel(true)
+    }
+
+    // remove one request from the bell list
+    const dismissRequest = id => {
+
+        removePending(id)
+
+        if (String(getRideId(ride)) === String(id)) {
+            setRidePopupPanel(false)
+            setRide(null)
+        }
+    }
+
+    // close the bell list automatically when the last request is gone
+    useEffect(() => {
+        if (pendingRides.length === 0) {
+            setNotifOpen(false)
+        }
+    }, [pendingRides.length])
+
     /* ================= CAPTAIN STATUS ================= */
 
     useEffect(() => {
@@ -127,6 +213,13 @@ const CaptainHome = () => {
             setOnline(captain.status === 'active')
         }
     }, [captain])
+
+    // offline captain cannot take rides -> drop the queue
+    useEffect(() => {
+        if (!online) {
+            clearAllPending()
+        }
+    }, [online, clearAllPending])
 
     /* ================= RESTORE RUNNING RIDE =================
         Asks the server for the captain's running ride and puts the screen back
@@ -189,6 +282,9 @@ const CaptainHome = () => {
                     }
                 })
 
+                // captain already has a ride -> queued requests are not valid
+                clearAllPending()
+
                 setRidePopupPanel(false)
                 setShowLiveTracking(true)
                 setExpanded(false)
@@ -210,7 +306,7 @@ const CaptainHome = () => {
             )
         }
 
-    }, [navigate])
+    }, [navigate, clearAllPending])
 
     // first load
     useEffect(() => {
@@ -258,7 +354,7 @@ const CaptainHome = () => {
     // captain can cancel only before the OTP is verified (status "accepted")
     const cancelRide = async () => {
 
-        const rideId = ride?._id || ride?.rideId
+        const rideId = getRideId(ride)
 
         if (!rideId) {
             resetRideState()
@@ -309,20 +405,24 @@ const CaptainHome = () => {
         }
     }
 
-    // the passenger cancelled the ride
+    // the passenger cancelled a ride
     useEffect(() => {
 
         if (!socket) return
 
         const handleCancelled = data => {
 
-            const currentId = ride?._id || ride?.rideId
+            const cancelledId = data?.rideId
 
-            if (
-                data?.rideId &&
-                currentId &&
-                String(data.rideId) !== String(currentId)
-            ) {
+            // always drop it from the bell list
+            removePending(cancelledId)
+
+            const currentId = getRideId(ride)
+
+            // cancelled ride was only waiting in the queue -> no alert, no reset
+            if (!currentId) return
+
+            if (cancelledId && String(cancelledId) !== String(currentId)) {
                 return
             }
 
@@ -338,7 +438,7 @@ const CaptainHome = () => {
         }
 
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [socket, ride?._id, ride?.rideId])
+    }, [socket, ride?._id, ride?.rideId, removePending])
 
     /* ================= LOCATION TRACKING ================= */
 
@@ -582,14 +682,39 @@ const CaptainHome = () => {
             // backend may send the ride directly or wrapped in { ride }
             const incoming = data?.ride || data
 
-            if (!incoming) return
+            const id = getRideId(incoming)
 
-            // do not replace the ride while captain is entering OTP
-            // or already tracking an accepted ride
+            if (!incoming || !id) return
+
+            // captain is entering OTP or already tracking an accepted ride
+            // -> do not touch the current ride, do not queue
             if (confirmOpenRef.current) return
 
-            setRide(incoming)
-            setRidePopupPanel(true)
+            // add to the queue (no duplicates)
+            setPendingRides(prev =>
+                prev.some(r => String(getRideId(r)) === String(id))
+                    ? prev
+                    : [...prev, incoming]
+            )
+
+            // auto-remove if nobody answers
+            if (REQUEST_EXPIRY_MS > 0) {
+
+                clearExpiryTimer(id)
+
+                expiryTimersRef.current[String(id)] = setTimeout(() => {
+                    delete expiryTimersRef.current[String(id)]
+                    setPendingRides(prev =>
+                        prev.filter(r => String(getRideId(r)) !== String(id))
+                    )
+                }, REQUEST_EXPIRY_MS)
+            }
+
+            // popup is free -> show it now, otherwise it waits in the bell list
+            if (!ridePopupOpenRef.current) {
+                setRide(incoming)
+                setRidePopupPanel(true)
+            }
         }
 
         socket.on('new-ride', handleNewRide)
@@ -606,8 +731,7 @@ const CaptainHome = () => {
 
         if (confirming) return
 
-        // the ride object from Mongo has `_id`, not `rideId`
-        const rideId = ride?._id || ride?.rideId
+        const rideId = getRideId(ride)
 
         if (!rideId) {
             console.error('Ride ID missing', ride)
@@ -641,6 +765,9 @@ const CaptainHome = () => {
 
                 setRide(confirmedRide)
 
+                // ride taken -> other requests can no longer be accepted
+                clearAllPending()
+
                 setRidePopupPanel(false)
 
                 setShowLiveTracking(true)
@@ -667,6 +794,7 @@ const CaptainHome = () => {
                     'Ride is no longer available'
                 )
 
+                removePending(rideId)
                 setRidePopupPanel(false)
                 setRide(null)
 
@@ -685,7 +813,7 @@ const CaptainHome = () => {
 
     const verifyOtp = async () => {
 
-        const rideId = ride?._id || ride?.rideId
+        const rideId = getRideId(ride)
 
         if (!rideId || otp.length !== 6 || verifyingOtp) return
 
@@ -840,8 +968,29 @@ const CaptainHome = () => {
             </div>
 
 
-            {/* PAST RIDES + LOGOUT */}
+            {/* NOTIFICATIONS + PAST RIDES + LOGOUT */}
             <div className="flex items-center gap-3">
+
+                {/* NOTIFICATIONS */}
+                <button
+                    type="button"
+                    onClick={() => setNotifOpen(v => !v)}
+                    aria-label={`Ride requests (${pendingRides.length})`}
+                    aria-expanded={notifOpen}
+                    className={`${roundButton} relative`}
+                >
+                    <i
+                        className={`text-xl ri-notification-3-line ${
+                            pendingRides.length > 0 ? 'animate-pulse' : ''
+                        }`}
+                    ></i>
+
+                    {pendingRides.length > 0 && (
+                        <span className="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-[#F15A24] px-1 text-[11px] font-bold text-white ring-2 ring-white">
+                            {pendingRides.length > 9 ? '9+' : pendingRides.length}
+                        </span>
+                    )}
+                </button>
 
                 <button
                     type="button"
@@ -1135,6 +1284,92 @@ const CaptainHome = () => {
             </div>
 
         </div>
+
+
+        {/* NOTIFICATION LIST */}
+        {notifOpen && (
+            <>
+                {/* click outside to close */}
+                <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setNotifOpen(false)}
+                />
+
+                <div className="fixed right-5 top-[4.5rem] z-50 w-[calc(100%-2.5rem)] max-w-sm overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 sm:right-8 sm:top-20">
+
+                    <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+                        <h3 className="font-extrabold text-[#12334A]">
+                            Ride requests
+                        </h3>
+                        <span className="rounded-full bg-[#F15A24]/10 px-2 py-0.5 text-xs font-semibold text-[#F15A24]">
+                            {pendingRides.length}
+                        </span>
+                    </div>
+
+                    <div className="max-h-[50dvh] overflow-y-auto overscroll-contain">
+
+                        {pendingRides.length === 0 ? (
+
+                            <p className="px-4 py-8 text-center text-sm text-gray-500">
+                                No pending ride requests
+                            </p>
+
+                        ) : (
+
+                            pendingRides.map(r => {
+
+                                const id = getRideId(r)
+
+                                return (
+                                    <div
+                                        key={id}
+                                        className="flex items-start gap-3 border-b border-gray-100 px-4 py-3 last:border-b-0"
+                                    >
+
+                                        <button
+                                            type="button"
+                                            onClick={() => openRequest(r)}
+                                            className="min-w-0 flex-1 text-left"
+                                        >
+                                            <p className="truncate font-semibold text-[#12334A]">
+                                                {r.user?.fullname?.firstname || 'New ride request'}
+                                                {r.fare != null && (
+                                                    <span className="ml-2 text-sm font-bold text-[#F15A24]">
+                                                        ₹{r.fare}
+                                                    </span>
+                                                )}
+                                            </p>
+
+                                            <p className="line-clamp-1 text-xs text-gray-600">
+                                                <i className="ri-map-pin-user-fill mr-1"></i>
+                                                {r.pickup}
+                                            </p>
+
+                                            <p className="line-clamp-1 text-xs text-gray-600">
+                                                <i className="ri-map-pin-2-fill mr-1"></i>
+                                                {r.destination}
+                                            </p>
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => dismissRequest(id)}
+                                            aria-label="Dismiss request"
+                                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                                        >
+                                            <i className="text-lg ri-close-line"></i>
+                                        </button>
+
+                                    </div>
+                                )
+                            })
+                        )}
+
+                    </div>
+
+                </div>
+            </>
+        )}
 
 
         {/* DIM BACKDROP */}
