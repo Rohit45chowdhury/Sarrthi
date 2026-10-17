@@ -89,18 +89,20 @@ module.exports.createRide = async (req, res) => {
         nearbyCaptains.forEach((item) => {
             const captain = item.captain || item;
             const captainId = getId(captain);
-            const distance = Number(item.distance || 0);
+            
 
             if (!captainId) return;
 
             notifyCaptain(captainId, 'new-ride', {
-                rideId: ride._id,
-                pickup: ride.pickup,
-                destination: ride.destination,
-                fare: ride.fare,
-                vehicleType: ride.vehicleType,
-                status: ride.status,
-                distance: Number(distance.toFixed(2))
+            rideId: ride._id,
+            pickup: ride.pickup,
+            destination: ride.destination,
+            fare: ride.fare,
+            vehicleType: ride.vehicleType,
+            status: ride.status,
+
+            // Ride distance: pickup to destination
+            distance: Number((Number(ride.distance || 0) / 1000).toFixed(2))
             });
         });
 
