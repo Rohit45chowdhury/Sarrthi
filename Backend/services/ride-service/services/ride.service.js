@@ -29,6 +29,25 @@ function normalizeVehicleType(type) {
 // Fare object keeps key "moto" for the frontend; this maps vehicleType -> fare key
 const FARE_KEY = { auto: 'auto', car: 'car', motorcycle: 'moto' };
 
+// Number(null) is 0 -> reject null / undefined / '' explicitly
+const num = value =>
+    value === null || value === undefined || value === ''
+        ? NaN
+        : Number(value);
+
+// accepts { ltd, lng } or { lat, lon } -> { ltd, lng } | null
+function cleanPoint(point) {
+    if (!point || typeof point !== 'object') return null;
+
+    const ltd = num(point.ltd ?? point.lat);
+    const lng = num(point.lng ?? point.lon);
+
+    if (!Number.isFinite(ltd) || !Number.isFinite(lng)) return null;
+    if (ltd < -90 || ltd > 90 || lng < -180 || lng > 180) return null;
+
+    return { ltd, lng };
+}
+
 // ---------------- GET FARE ----------------
 async function getFare(pickup, destination) {
     if (!pickup || !destination) {
@@ -86,15 +105,19 @@ function getDistanceInKm(lat1, lon1, lat2, lon2) {
 // Returns [{ captain, distance }] sorted nearest-first.
 // Captains come from captain-service (GET /captains/active?vehicleType=...),
 // which must return active captains of that type that have a saved location.
-module.exports.getNearbyCaptains = async ({ pickup, vehicleType }) => {
+module.exports.getNearbyCaptains = async ({ pickup, vehicleType, pickupCoordinates }) => {
     const normalizedType = normalizeVehicleType(vehicleType);
 
     if (!pickup || !normalizedType) {
         throw new Error('Invalid pickup or vehicle type');
     }
 
-    const { ltd: pickupLat, lng: pickupLng } =
+    // saved exact point first, geocoder only as a fallback
+    const point =
+        cleanPoint(pickupCoordinates) ||
         await mapService.getAddressCoordinates(pickup.trim());
+
+    const { ltd: pickupLat, lng: pickupLng } = point;
 
     const { data } = await http.get(`${CAPTAIN_SERVICE_URL}/captains/active`, {
         params: { vehicleType: normalizedType },
@@ -127,7 +150,14 @@ module.exports.getNearbyCaptains = async ({ pickup, vehicleType }) => {
 };
 
 // ---------------- CREATE RIDE ----------------
-module.exports.createRide = async ({ user, pickup, destination, vehicleType }) => {
+module.exports.createRide = async ({
+    user,
+    pickup,
+    destination,
+    vehicleType,
+    pickupCoordinates,
+    destinationCoordinates
+}) => {
     if (!user || !pickup || !destination || !vehicleType) {
         throw new Error('All fields are required');
     }
@@ -139,11 +169,27 @@ module.exports.createRide = async ({ user, pickup, destination, vehicleType }) =
 
     const fare = await getFare(pickup, destination);
 
+    // Exact points sent by the app are saved as they are.
+    // Old clients that send none: try the geocoder (cached by maps-service),
+    // a failure only means "no coordinates saved", the ride is still created.
+    const fromGeocoder = address =>
+        mapService
+            .getAddressCoordinates(address.trim())
+            .then(({ ltd, lng }) => ({ ltd, lng }))
+            .catch(() => null);
+
+    const [pickupPoint, destinationPoint] = await Promise.all([
+        cleanPoint(pickupCoordinates) || fromGeocoder(pickup),
+        cleanPoint(destinationCoordinates) || fromGeocoder(destination)
+    ]);
+
     // otp is select:false, but create() returns the doc with the value we just set
     return rideModel.create({
         user,
         pickup: pickup.trim(),
         destination: destination.trim(),
+        pickupCoordinates: pickupPoint || undefined,
+        destinationCoordinates: destinationPoint || undefined,
         vehicleType: normalizedType,
         otp: getOtp(6),
         fare: fare[FARE_KEY[normalizedType]],
