@@ -1,4 +1,3 @@
-
 import React, {
   useEffect,
   useMemo,
@@ -12,6 +11,7 @@ import {
   Marker,
   Popup,
   Polyline,
+  ZoomControl,
   useMap
 } from 'react-leaflet';
 
@@ -21,6 +21,8 @@ import 'leaflet/dist/leaflet.css';
 const OSRM_URL = 'https://router.project-osrm.org/route/v1/driving';
 
 const FALLBACK_CENTER = [22.5726, 88.3639];
+
+const DEFAULT_PADDING = 55;
 
 // ---------------- ICONS ----------------
 
@@ -35,7 +37,7 @@ const userIcon = new L.DivIcon({
   className: '',
   html: '<div style="font-size:28px">📍</div>',
   iconSize: [36, 36],
-  iconAnchor: [18, 18]
+  iconAnchor: [18, 36]
 });
 
 // ---------------- NORMALIZE LOCATION ----------------
@@ -75,8 +77,10 @@ function normalizePoint(point) {
   if (
     lat === null ||
     lat === undefined ||
+    lat === '' ||
     lng === null ||
-    lng === undefined
+    lng === undefined ||
+    lng === ''
   ) {
     return null;
   }
@@ -126,54 +130,78 @@ function distanceMeters(a, b) {
 }
 
 // ---------------- MAP AUTO-POSITIONING ----------------
+// `padding` keeps markers away from the screen areas that are covered by
+// the bottom sheet / top bar of the page that contains the map.
 
-function FitPoints({ points }) {
+function FitPoints({ points, padding }) {
   const map = useMap();
   const initializedRef = useRef(false);
 
   useEffect(() => {
     if (!points.length) return;
 
-    if (!initializedRef.current) {
-      if (points.length === 1) {
-        map.setView(points[0], 16);
-      } else {
-        map.fitBounds(L.latLngBounds(points), {
-          padding: [55, 55],
-          maxZoom: 16
-        });
-      }
+    const fit = animate =>
+      map.fitBounds(L.latLngBounds(points), {
+        paddingTopLeft: [padding.left, padding.top],
+        paddingBottomRight: [padding.right, padding.bottom],
+        maxZoom: 16,
+        animate
+      });
 
+    if (!initializedRef.current) {
+      fit(false);
       initializedRef.current = true;
       return;
     }
 
-    const bounds = map.getBounds();
+    // A marker counts as "outside" when it is outside the visible area
+    // (the map minus the padding).
+    const size = map.getSize();
 
-    const outside = points.some(point => !bounds.contains(point));
+    const outside = points.some(point => {
+      const p = map.latLngToContainerPoint(point);
 
-    if (outside) {
-      if (points.length === 1) {
-        map.panTo(points[0], { animate: true });
-      } else {
-        map.fitBounds(L.latLngBounds(points), {
-          padding: [55, 55],
-          maxZoom: 16,
-          animate: true
-        });
-      }
-    }
-  }, [map, points]);
+      return (
+        p.x < padding.left ||
+        p.x > size.x - padding.right ||
+        p.y < padding.top ||
+        p.y > size.y - padding.bottom
+      );
+    });
+
+    if (outside) fit(true);
+  }, [map, points, padding]);
 
   return null;
 }
 
 // ---------------- MAIN COMPONENT ----------------
+//
+// Props
+//   role            'user' | 'captain'
+//   captainLocation captain position (used on the user screen)
+//   userLocation    passenger live position (used on the captain screen)
+//   pickupLocation  [lat, lng] pickup point, shown on the captain screen
+//                   while `tracking` is true and no live passenger position
+//   pickupAddress   text shown in the pickup marker popup
+//   tracking        false -> only the own marker, no pickup marker/route
+//   showInfo        true  -> small debug panel with distances (default: map only)
+//   zoomControl     true  -> +/- buttons (default off, pinch / scroll still work)
+//   fitPadding      { top, right, bottom, left } in px, so markers stay out
+//                   from under the page's bottom sheet / top bar
+//   className       extra classes for the wrapper
 
 export default function LiveTracking({
   role = 'user',
   captainLocation = null,
-  userLocation = null
+  userLocation = null,
+  pickupLocation = null,
+  pickupAddress = '',
+  tracking = true,
+  showInfo = false,
+  zoomControl = false,
+  fitPadding = null,
+  className = ''
 }) {
   const [myPosition, setMyPosition] = useState(null);
   const [gpsError, setGpsError] = useState('');
@@ -190,6 +218,21 @@ export default function LiveTracking({
   });
 
   const routeRequestRef = useRef(null);
+
+  const padTop = fitPadding?.top ?? DEFAULT_PADDING;
+  const padRight = fitPadding?.right ?? DEFAULT_PADDING;
+  const padBottom = fitPadding?.bottom ?? DEFAULT_PADDING;
+  const padLeft = fitPadding?.left ?? DEFAULT_PADDING;
+
+  const padding = useMemo(
+    () => ({
+      top: padTop,
+      right: padRight,
+      bottom: padBottom,
+      left: padLeft
+    }),
+    [padTop, padRight, padBottom, padLeft]
+  );
 
   // ---------------- CURRENT DEVICE GPS ----------------
 
@@ -241,25 +284,38 @@ export default function LiveTracking({
 
   // ---------------- CAPTAIN LOCATION ----------------
 
-  // On captain screen, current device = captain.
-  // On user screen, captain location comes from Socket.IO.
+  // Captain screen: current device = captain.
+  // User screen: captain location comes from Socket.IO (only while tracking).
 
   const captainPoint = useMemo(() => {
-    return role === 'captain'
-      ? normalizePoint(myPosition)
-      : normalizePoint(captainLocation);
-  }, [role, myPosition, captainLocation]);
+    if (role === 'captain') {
+      return (
+        normalizePoint(myPosition) ||
+        normalizePoint(captainLocation)
+      );
+    }
 
-  // ---------------- USER LOCATION ----------------
+    return tracking ? normalizePoint(captainLocation) : null;
+  }, [role, tracking, myPosition, captainLocation]);
 
-  // On user screen, current device = user.
-  // On captain screen, user location comes from Socket.IO.
+  // ---------------- USER / PICKUP LOCATION ----------------
+
+  // User screen: current device = user.
+  // Captain screen: live passenger position, or the pickup point,
+  // and only while a ride is being tracked.
 
   const userPoint = useMemo(() => {
-    return role === 'captain'
-      ? normalizePoint(userLocation)
-      : normalizePoint(myPosition);
-  }, [role, userLocation, myPosition]);
+    if (role === 'captain') {
+      if (!tracking) return null;
+
+      return (
+        normalizePoint(userLocation) ||
+        normalizePoint(pickupLocation)
+      );
+    }
+
+    return normalizePoint(myPosition);
+  }, [role, tracking, userLocation, pickupLocation, myPosition]);
 
   // Keep latest points available to the route polling effect.
   latestPointsRef.current = {
@@ -279,6 +335,21 @@ export default function LiveTracking({
     return distanceMeters(captainPoint, userPoint);
   }, [captainPoint, userPoint]);
 
+  // ---------------- CLEAR ROUTE WHEN A POINT DISAPPEARS ----------------
+
+  const hasBoth = Boolean(captainPoint && userPoint);
+
+  useEffect(() => {
+    if (hasBoth) return;
+
+    lastRoutedPointsRef.current = null;
+
+    setRoute(previous => (previous.length ? [] : previous));
+    setRouteDistance(null);
+    setRouteDuration(null);
+    setRouteError('');
+  }, [hasBoth]);
+
   // ---------------- ROAD ROUTE ----------------
 
   useEffect(() => {
@@ -291,16 +362,7 @@ export default function LiveTracking({
       } = latestPointsRef.current;
 
       // Both locations are required for a road route.
-      if (!captain || !user) {
-        lastRoutedPointsRef.current = null;
-
-        setRoute([]);
-        setRouteDistance(null);
-        setRouteDuration(null);
-        setRouteError('');
-
-        return;
-      }
+      if (!captain || !user) return;
 
       const previous = lastRoutedPointsRef.current;
 
@@ -402,7 +464,7 @@ export default function LiveTracking({
     };
   }, []);
 
-  // ---------------- FORMAT DISTANCE ----------------
+  // ---------------- FORMAT DISTANCE (debug panel only) ----------------
 
   const formatDistance = meters => {
     if (meters == null) return 'Calculating...';
@@ -414,63 +476,70 @@ export default function LiveTracking({
     return `${(meters / 1000).toFixed(2)} km`;
   };
 
+  const otherLabel =
+    role === 'captain'
+      ? pickupAddress || 'Passenger location'
+      : 'Your location';
+
   // ---------------- UI ----------------
+  // `isolate` keeps every Leaflet layer (z-index up to 1000) inside the map,
+  // so page buttons, top bars and bottom sheets always stay above the map.
 
   return (
-    <div className="relative w-full h-full min-h-[300px]">
-      {/* Distance and status panel */}
-      <div className="absolute z-[1000] top-3 left-3 right-3 bg-white rounded-xl shadow-md p-3">
-        <div className="font-semibold text-gray-900">
-          Captain ↔ User
+    <div
+      className={`relative isolate h-full min-h-[300px] w-full ${className}`}
+    >
+      {/* Optional debug panel - off by default (map only) */}
+      {showInfo && (
+        <div className="absolute bottom-3 left-3 z-[500] max-w-[85%] rounded-xl bg-white p-3 text-sm text-gray-700 shadow-md">
+          <div className="font-semibold text-gray-900">
+            Captain ↔ {role === 'captain' ? 'Passenger' : 'You'}
+          </div>
+
+          <div>
+            Straight-line: {formatDistance(straightDistance)}
+          </div>
+
+          {routeDistance !== null && (
+            <div>
+              Road: {formatDistance(routeDistance)}
+
+              {routeDuration !== null &&
+                ` · ${Math.max(
+                  1,
+                  Math.round(routeDuration / 60)
+                )} min`}
+            </div>
+          )}
+
+          {gpsError && (
+            <div className="mt-1 text-xs text-red-600">
+              {gpsError}
+            </div>
+          )}
+
+          {routeError && (
+            <div className="mt-1 text-xs text-amber-700">
+              {routeError}
+            </div>
+          )}
         </div>
-
-        <div className="text-sm text-gray-700">
-          Straight-line distance:{' '}
-          {formatDistance(straightDistance)}
-        </div>
-
-        {routeDistance !== null && (
-          <div className="text-sm text-gray-700">
-            Road distance: {formatDistance(routeDistance)}
-
-            {routeDuration !== null &&
-              ` · ${Math.max(
-                1,
-                Math.round(routeDuration / 60)
-              )} min`}
-          </div>
-        )}
-
-        {(!captainPoint || !userPoint) && (
-          <div className="text-xs text-amber-700 mt-1">
-            Waiting for both live GPS locations...
-          </div>
-        )}
-
-        {gpsError && (
-          <div className="text-xs text-red-600 mt-1">
-            {gpsError}
-          </div>
-        )}
-
-        {routeError && (
-          <div className="text-xs text-amber-700 mt-1">
-            {routeError}
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Leaflet map */}
       <MapContainer
         center={FALLBACK_CENTER}
         zoom={13}
         scrollWheelZoom={true}
-        className="w-full h-full min-h-[300px] rounded-xl"
+        zoomControl={false}
+        className="z-0 h-full min-h-[300px] w-full"
       >
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
+
+        {zoomControl && <ZoomControl position="topright" />}
 
         {/* Captain marker */}
         {captainPoint && (
@@ -479,37 +548,37 @@ export default function LiveTracking({
             icon={captainIcon}
           >
             <Popup>
-              Captain's current GPS location
+              {role === 'captain'
+                ? 'Your location'
+                : 'Your captain'}
             </Popup>
           </Marker>
         )}
 
-        {/* User marker */}
+        {/* User / pickup marker */}
         {userPoint && (
           <Marker
             position={userPoint}
             icon={userIcon}
           >
-            <Popup>
-              User's current GPS location
-            </Popup>
+            <Popup>{otherLabel}</Popup>
           </Marker>
         )}
 
         {/* Road route */}
-        {route.length > 0 && (
+        {route.length > 0 && hasBoth && (
           <Polyline
             positions={route}
             pathOptions={{
-              color: '#2563eb',
+              color: '#12334A',
               weight: 5,
               opacity: 0.85
             }}
           />
         )}
 
-        {/* Automatically position markers in view */}
-        <FitPoints points={points} />
+        {/* Keep markers inside the visible part of the map */}
+        <FitPoints points={points} padding={padding} />
       </MapContainer>
     </div>
   );
