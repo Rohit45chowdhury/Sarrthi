@@ -67,19 +67,6 @@ const toCoords = (lat, lng) => {
         : null
 }
 
-// suggestion / GPS point -> { address, ltd, lng } or null
-const placeCoords = location => {
-
-    const point = toCoords(
-        location?.ltd ?? location?.lat,
-        location?.lng ?? location?.lon
-    )
-
-    return point
-        ? { address: location.address, ltd: point[0], lng: point[1] }
-        : null
-}
-
 const Home = () => {
 
     const { user } = useContext(UserDataContext)
@@ -167,11 +154,6 @@ const Home = () => {
 
     // "<rideId>:<status>" of the last ride we restored -> same state is not applied twice
     const lastRestoredRef = useRef('')
-
-    // exact points of the chosen suggestion / GPS fix.
-    // Sent with the ride only while ref.address still equals the input text.
-    const pickupCoordsRef = useRef(null)
-    const destinationCoordsRef = useRef(null)
 
     // Riding page sends { rideEnded: true } when the ride just finished.
     // For a few seconds we do NOT push the user back to /riding, because the
@@ -309,15 +291,9 @@ const Home = () => {
 
             if (running.status === 'accepted') {
 
-                // captain is on the way: map in tracking mode. Start from the
-                // captain's last known point, live updates arrive through
-                // "captain-location-update"
-                setCaptainLocation(
-                    toCoords(
-                        running.captain?.location?.ltd,
-                        running.captain?.location?.lng
-                    )
-                )
+                // captain is on the way: map in tracking mode, position arrives
+                // through "captain-location-update"
+                setCaptainLocation(null)
                 setShowLiveTracking(true)
 
                 setActivePanel('waiting')
@@ -543,14 +519,9 @@ const Home = () => {
 
             setRide(acceptedRide)
 
-            // map switches to tracking mode, starting from the captain's last
-            // known point; live updates arrive through "captain-location-update"
-            setCaptainLocation(
-                toCoords(
-                    acceptedRide.captain?.location?.ltd,
-                    acceptedRide.captain?.location?.lng
-                )
-            )
+            // map switches to tracking mode, the captain position arrives
+            // through "captain-location-update"
+            setCaptainLocation(null)
             setShowLiveTracking(true)
 
             setActivePanel('waiting')
@@ -762,13 +733,6 @@ const Home = () => {
 
             setPickup(address)
 
-            // exact GPS point is better than geocoding the address again
-            pickupCoordsRef.current = {
-                address,
-                ltd: latitude,
-                lng: longitude
-            }
-
             setSuggestions(s => ({ ...s, pickup: [] }))
 
             setActiveField('destination')
@@ -891,8 +855,6 @@ const Home = () => {
 
         setPickup(location.address)
 
-        pickupCoordsRef.current = placeCoords(location)
-
         setSuggestionsFor('pickup', [])
 
         setActiveField('destination')
@@ -902,8 +864,6 @@ const Home = () => {
     const handleDestinationSelect = location => {
 
         setDestination(location.address)
-
-        destinationCoordsRef.current = placeCoords(location)
 
         setSuggestionsFor('destination', [])
 
@@ -1001,25 +961,15 @@ const Home = () => {
             throw new Error('Missing ride information')
         }
 
-        const body = { pickup, destination, vehicleType }
-
-        const p = pickupCoordsRef.current
-        const d = destinationCoordsRef.current
-
-        // only if the text was not edited after choosing the suggestion
-        if (p && p.address === pickup) {
-            body.pickupCoordinates = { ltd: p.ltd, lng: p.lng }
-        }
-
-        if (d && d.address === destination) {
-            body.destinationCoordinates = { ltd: d.ltd, lng: d.lng }
-        }
-
-        console.log('Creating ride:', body)
+        console.log('Creating ride:', {
+            pickup,
+            destination,
+            vehicleType
+        })
 
         const { data } = await axios.post(
             `${BASE_URL}/rides/create`,
-            body,
+            { pickup, destination, vehicleType },
             { headers: authHeaders() }
         )
 

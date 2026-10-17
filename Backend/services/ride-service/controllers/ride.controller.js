@@ -52,42 +52,12 @@ function validationFailed(req, res) {
     return true;
 }
 
-// Saved coordinates first. Geocoding is only for old rides that have none.
-async function coordsOf(saved, address, geocode = true) {
-    const ltd = Number(saved?.ltd);
-    const lng = Number(saved?.lng);
-
-    if (
-        saved?.ltd != null &&
-        saved?.lng != null &&
-        Number.isFinite(ltd) &&
-        Number.isFinite(lng)
-    ) {
-        return { ltd, lng };
-    }
-
-    if (!geocode || !address) return null;
-
-    try {
-        return await mapService.getAddressCoordinates(address);
-    } catch (error) {
-        console.error('COORDINATES ERROR:', error.message);
-        return null;
-    }
-}
-
 
 // ---------------- CREATE RIDE ----------------
 module.exports.createRide = async (req, res) => {
     if (validationFailed(req, res)) return;
 
-    const {
-        pickup,
-        destination,
-        vehicleType,
-        pickupCoordinates,
-        destinationCoordinates
-    } = req.body;
+    const { pickup, destination, vehicleType } = req.body;
 
     try {
         const userId = getId(req.user);
@@ -100,9 +70,7 @@ module.exports.createRide = async (req, res) => {
             user: userId,
             pickup,
             destination,
-            vehicleType,
-            pickupCoordinates,
-            destinationCoordinates
+            vehicleType
         });
 
         console.log('RIDE CREATED:', ride._id, vehicleType, ride.fare);
@@ -110,11 +78,7 @@ module.exports.createRide = async (req, res) => {
         // Ride already exists: a captain-search failure must not turn this into a 500
         let nearbyCaptains = [];
         try {
-            nearbyCaptains = await rideService.getNearbyCaptains({
-                pickup,
-                vehicleType,
-                pickupCoordinates: withoutOtp(ride).pickupCoordinates
-            });
+            nearbyCaptains = await rideService.getNearbyCaptains({ pickup, vehicleType });
         } catch (error) {
             console.error('NEARBY CAPTAINS ERROR:', error.message);
         }
@@ -193,24 +157,24 @@ module.exports.confirmRide = async (req, res) => {
         // start live tracking (fire-and-forget)
         trackCaptainRide({ captainId, rideId: ride._id, userId });
 
-        const full = ride.toObject();
-
-        // saved coordinates + both profiles in parallel; any failure degrades to null
-        const [pickupCoordinates, destinationCoordinates, userProfile, captainProfile] =
-            await Promise.all([
-                coordsOf(full.pickupCoordinates, full.pickup),
-                coordsOf(full.destinationCoordinates, full.destination, false),
-                fetchUser(userId),
-                fetchCaptain(captainId)
-            ]);
+        // pickup coords + both profiles in parallel; any failure degrades to null
+        const [pickupCoordinates, userProfile, captainProfile] = await Promise.all([
+            mapService.getAddressCoordinates(ride.pickup).catch((error) => {
+                console.error('PICKUP COORDINATES ERROR:', error.message);
+                return null;
+            }),
+            fetchUser(userId),
+            fetchCaptain(captainId)
+        ]);
 
         // USER gets the full ride (including OTP) + captain details
         if (userId) {
+            const full = ride.toObject();
+
             notifyUser(userId, 'ride-accepted', {
                 ...full,
                 captain: captainProfile || full.captain,
-                pickupCoordinates,
-                destinationCoordinates
+                pickupCoordinates
             });
         }
 
@@ -221,8 +185,7 @@ module.exports.confirmRide = async (req, res) => {
         return res.status(200).json({
             success: true,
             ...captainView,
-            pickupCoordinates,
-            destinationCoordinates
+            pickupCoordinates
         });
 
     } catch (error) {
@@ -247,23 +210,14 @@ module.exports.startRide = async (req, res) => {
 
         const userId = getId(ride.user);
 
-        // switch live tracking to the "ongoing" phase first (no await)
-        trackCaptainRide({ captainId, rideId: ride._id, userId, phase: 'ongoing' });
-
-        const rideObj = withoutOtp(ride);
-
-        const [pickupCoordinates, destinationCoordinates] = await Promise.all([
-            coordsOf(rideObj.pickupCoordinates, rideObj.pickup, false),
-            coordsOf(rideObj.destinationCoordinates, rideObj.destination)
-        ]);
-
-        const payload = { ...rideObj, pickupCoordinates, destinationCoordinates };
-
         if (userId) {
-            notifyUser(userId, 'ride-started', payload);
+            notifyUser(userId, 'ride-started', withoutOtp(ride));
         }
 
-        return res.status(200).json(payload);
+        // switch live tracking to the "ongoing" phase
+        trackCaptainRide({ captainId, rideId: ride._id, userId, phase: 'ongoing' });
+
+        return res.status(200).json(withoutOtp(ride));
 
     } catch (error) {
         console.error('START RIDE ERROR:', error);
@@ -448,23 +402,25 @@ async function currentRidePayload(ride, role) {
 
     const accepted = obj.status === 'accepted';
     const ongoing = obj.status === 'ongoing';
-    const running = accepted || ongoing;
 
-    // saved points are returned as they are; geocoding only for old running rides
     const [pickupCoordinates, destinationCoordinates, profile] = await Promise.all([
-        coordsOf(obj.pickupCoordinates, obj.pickup, running),
-        coordsOf(obj.destinationCoordinates, obj.destination, ongoing),
+        accepted
+            ? mapService.getAddressCoordinates(obj.pickup).catch(() => null)
+            : null,
+        ongoing
+            ? mapService.getAddressCoordinates(obj.destination).catch(() => null)
+            : null,
         role === 'user'
             ? (captainId ? fetchCaptain(captainId) : null)
             : fetchUser(userId)
     ]);
 
     if (role === 'user') {
-        // OTP only while the captain is coming to the pickup
+        // OTP sirf tab jab captain pickup par aa raha hai (ride-accepted jaisa)
         if (!accepted) delete obj.otp;
         if (profile) obj.captain = profile;
     } else {
-        delete obj.otp;                 // never to the captain
+        delete obj.otp;                 // captain ko OTP kabhi nahi
         if (profile) obj.user = profile;
     }
 
@@ -548,9 +504,7 @@ module.exports.cancelRide = async (req, res) => {
             rideId: req.body.rideId,
             userId,
             captainId,
-            reason: req.body.reason,
-            // "Try again" sends pendingOnly: true -> never cancel an accepted ride
-            pendingOnly: req.body.pendingOnly === true
+            reason: req.body.reason
         });
 
         const payload = {

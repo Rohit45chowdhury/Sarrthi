@@ -107,9 +107,8 @@ const emitToUser = (userId, event, data) =>
 // RIDE TRACKING
 // ======================================================
 
-// phase 'accepted' : captain heading to pickup
-// phase 'ongoing'  : ride in progress
-// (both phases use the same event: captain-location-update)
+// phase 'accepted' : captain heading to pickup  (event: captain-location-update)
+// phase 'ongoing'  : ride in progress           (event: captain-location)
 function trackCaptainRide({ captainId, rideId, userId, phase = 'accepted' }) {
     if (!captainId || !rideId || !userId) return false;
 
@@ -327,8 +326,7 @@ function initializeSocket(server) {
 
         // ==================================================
         // CAPTAIN LOCATION
-        // saves location + relays it to the passenger while a ride is
-        // accepted (heading to pickup) or ongoing
+        // saves location + (while heading to pickup) relays to passenger
         // ==================================================
 
         socket.on('update-location-captain', async (data) => {
@@ -352,15 +350,11 @@ function initializeSocket(server) {
 
                 const tracked = await getTracked(socket, captainId);
 
-                // relay in BOTH phases (heading to pickup + ride ongoing)
-                // through one event, so the user side needs a single listener
-                if (tracked) {
+                if (tracked && tracked.phase === 'accepted') {
                     emitToUser(tracked.userId, 'captain-location-update', {
                         rideId: tracked.rideId,
-                        phase: tracked.phase,
                         ltd,
-                        lng,
-                        ts: Date.now()
+                        lng
                     });
                 }
 
@@ -371,8 +365,7 @@ function initializeSocket(server) {
 
 
         // ==================================================
-        // CAPTAIN LIVE LOCATION -> PASSENGER (old event, kept for old clients)
-        // New clients use "update-location-captain" for both phases.
+        // CAPTAIN LIVE LOCATION -> PASSENGER (ride ongoing)
         // ==================================================
 
         socket.on('captain-live-location', async (data) => {
