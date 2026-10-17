@@ -1,20 +1,132 @@
 import React from 'react'
 
+/* ================= DISTANCE HELPERS =================
+    Problem: popup showed ride.distance as-is. If the backend sends meters
+    (OSRM default) or a wrong value, the card shows a wrong km number.
+
+    Fix:
+    1. normalise the unit (meters -> km)
+    2. a road route can never be shorter than the straight line between
+       pickup and destination -> if the reported distance is shorter, it is
+       wrong, so we show an estimate (straight line x 1.3) with a "~" sign
+*/
+
+const toCoords = (lat, lng) => {
+
+    if (
+        lat === null || lat === undefined || lat === '' ||
+        lng === null || lng === undefined || lng === ''
+    ) {
+        return null
+    }
+
+    const a = Number(lat)
+    const b = Number(lng)
+
+    return Number.isFinite(a) && Number.isFinite(b)
+        ? [a, b]
+        : null
+}
+
+// straight line distance in km (haversine)
+const straightLineKm = (a, b) => {
+
+    const R = 6371
+    const rad = d => (d * Math.PI) / 180
+
+    const dLat = rad(b[0] - a[0])
+    const dLng = rad(b[1] - a[1])
+
+    const x =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(rad(a[0])) *
+        Math.cos(rad(b[0])) *
+        Math.sin(dLng / 2) ** 2
+
+    return 2 * R * Math.asin(Math.sqrt(x))
+}
+
+// OSRM gives meters. A city ride above 500 "km" is certainly meters.
+const normaliseKm = value => {
+
+    if (value === null || value === undefined || value === '') return null
+
+    const n = Number(value)
+
+    if (!Number.isFinite(n) || n < 0) return null
+
+    return n > 500 ? n / 1000 : n
+}
+
+// returns { km, estimated } or null
+const getRideDistance = ride => {
+
+    if (!ride) return null
+
+    const pickup = toCoords(
+        ride.pickupCoordinates?.ltd,
+        ride.pickupCoordinates?.lng
+    )
+
+    // NOTE: field name assumed to match pickupCoordinates -> { ltd, lng }
+    const destination = toCoords(
+        ride.destinationCoordinates?.ltd,
+        ride.destinationCoordinates?.lng
+    )
+
+    const line =
+        pickup && destination
+            ? straightLineKm(pickup, destination)
+            : null
+
+    const reported = normaliseKm(ride.distance)
+
+    if (reported === null) {
+        return line !== null
+            ? { km: line * 1.3, estimated: true }
+            : null
+    }
+
+    // road distance shorter than the straight line -> reported value is wrong
+    if (line !== null && reported < line * 0.95) {
+        return { km: line * 1.3, estimated: true }
+    }
+
+    return { km: reported, estimated: false }
+}
+
 const RidePopUp = ({
     ride,
     confirming = false,
     setRidePopupPanel,
-    confirmRide
+    confirmRide,
+    onIgnore            // optional: lets the parent also remove the request from the bell list
 }) => {
 
     const firstName = ride?.user?.fullname?.firstname || 'User'
     const lastName = ride?.user?.fullname?.lastname || ''
+
+    const distance = getRideDistance(ride)
+
+    const distanceLabel = distance
+        ? `${distance.estimated ? '~' : ''}${distance.km.toFixed(1)} km`
+        : '—'
 
     const handleAccept = async () => {
 
         if (!ride || !confirmRide || confirming) return
 
         await confirmRide()
+    }
+
+    const handleIgnore = () => {
+
+        if (onIgnore) {
+            onIgnore(ride)
+            return
+        }
+
+        setRidePopupPanel(false)
     }
 
     return (
@@ -85,9 +197,16 @@ const RidePopUp = ({
             {/* chips */}
             <div className="relative mt-4 flex items-center gap-2">
 
-                <div className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-medium">
+                <div
+                    className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-medium"
+                    title={
+                        distance?.estimated
+                            ? 'Approximate distance'
+                            : 'Route distance'
+                    }
+                >
                     <i className="ri-route-line text-[#F15A24]"></i>
-                    {ride?.distance != null ? `${ride.distance} km` : '—'}
+                    {distanceLabel}
                 </div>
 
                 <div className="flex items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs font-medium">
@@ -147,7 +266,7 @@ const RidePopUp = ({
 
             <button
                 type="button"
-                onClick={() => setRidePopupPanel(false)}
+                onClick={handleIgnore}
                 disabled={confirming}
                 className="flex-1 rounded-2xl bg-gray-100 p-4 font-bold text-gray-600 transition-all duration-200 hover:bg-gray-200 active:scale-[0.98] disabled:opacity-50"
             >
