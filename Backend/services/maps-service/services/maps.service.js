@@ -3,9 +3,14 @@ const crypto = require('crypto');
 const redis = require('../redis');
 
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
+const PHOTON = 'https://photon.komoot.io';
 const OSRM = 'https://router.project-osrm.org';
 
-// Nominatim policy: identify your app (add a contact email/URL in .env)
+// Rough bounding box of India: minLon,minLat,maxLon,maxLat
+const INDIA_BBOX = '68.1,6.7,97.4,35.7';
+
+// Nominatim policy: identify your app (set a contact email/URL in .env)
+// Example: NOMINATIM_USER_AGENT=Saarthi-Ride-App/1.0 (you@example.com)
 const HEADERS = {
     'User-Agent': process.env.NOMINATIM_USER_AGENT || 'Saarthi-Ride-App/1.0',
     'Accept-Language': 'en'
@@ -62,8 +67,7 @@ async function throttleNominatim() {
     const now = Date.now();
     const startAt = Math.max(now, nextSlot);
 
-    // Without a cap, rapid requests (e.g. typing) build an endless queue
-    // and ride booking ends up stuck behind stale suggestion lookups
+    // Without a cap, rapid requests build an endless queue
     if (startAt - now > MAX_QUEUE_WAIT) {
         throw new GeoError('Location service is busy, try again', 503);
     }
@@ -95,6 +99,63 @@ function buildQueries(original) {
 
 const geoKey = (text) => `geo:${hash(text.trim().toLowerCase())}`;
 
+/* ================= PHOTON (AUTOCOMPLETE + FALLBACK) ================= */
+
+// Build a readable one-line address from Photon properties
+function formatPhotonAddress(p) {
+    const street = [p.housenumber, p.street].filter(Boolean).join(' ');
+
+    const parts = [
+        p.name,
+        street,
+        p.locality,
+        p.district,
+        p.city,
+        p.county,
+        p.state,
+        p.postcode,
+        p.country
+    ].filter(Boolean);
+
+    // Remove repeated parts (e.g. name equal to city)
+    return [...new Set(parts)].join(', ');
+}
+
+// Returns [{ address, lat, lng }] limited to India
+async function photonSearch(query, limit = 5) {
+    const { data } = await axios.get(`${PHOTON}/api/`, {
+        params: {
+            q: query,
+            limit,
+            lang: 'en',
+            bbox: INDIA_BBOX
+        },
+        headers: HEADERS,
+        timeout: 8000
+    });
+
+    const results = [];
+
+    for (const feature of data?.features || []) {
+        const p = feature.properties || {};
+        const [lng, lat] = feature.geometry?.coordinates || [];
+
+        if (p.countrycode && p.countrycode !== 'IN') continue;
+
+        const address = formatPhotonAddress(p);
+
+        if (
+            address &&
+            Number.isFinite(Number(lat)) &&
+            Number.isFinite(Number(lng))
+        ) {
+            results.push({ address, lat: Number(lat), lng: Number(lng) });
+        }
+    }
+
+    return results;
+}
+
 /* ================= ADDRESS -> COORDINATES ================= */
 
 async function getAddressCoordinates(address) {
@@ -109,7 +170,12 @@ async function getAddressCoordinates(address) {
 
     if (cached) return cached;
 
-    for (const query of buildQueries(original)) {
+    const queries = buildQueries(original);
+
+    let blocked = false;
+
+    // 1) Nominatim first
+    for (const query of queries) {
         try {
             await throttleNominatim();
 
@@ -131,7 +197,6 @@ async function getAddressCoordinates(address) {
 
                 if (Number.isFinite(lat) && Number.isFinite(lng)) {
                     // Captains are stored as { ltd, lng }, so return both names
-                    // (`lat` and `ltd`) and neither side breaks
                     const result = { lat, ltd: lat, lng };
 
                     await cacheSet(cacheKey, result, GEO_TTL);
@@ -140,19 +205,50 @@ async function getAddressCoordinates(address) {
                 }
             }
         } catch (error) {
-            // Queue is full: no point trying the remaining fallbacks
-            if (error instanceof GeoError) throw error;
+            // Queue is full: skip straight to the Photon fallback
+            if (error instanceof GeoError) {
+                blocked = true;
+                break;
+            }
 
             const status = error.response?.status;
 
             console.error('Geocoding error for query:', query, status || error.message);
 
-            // If we're blocked/rate-limited, more queries make it worse
+            // Blocked/rate-limited: more Nominatim queries make it worse
             if (status === 429 || status === 403) {
-                throw new GeoError('Location service is rate limited, try again shortly', 503);
+                blocked = true;
+                break;
             }
             // other failures: continue with the next fallback query
         }
+    }
+
+    // 2) Photon fallback (Nominatim blocked, busy, or found nothing)
+    for (const query of queries) {
+        try {
+            const results = await photonSearch(query, 1);
+
+            if (results.length > 0) {
+                const { lat, lng } = results[0];
+                const result = { lat, ltd: lat, lng };
+
+                await cacheSet(cacheKey, result, GEO_TTL);
+
+                return result;
+            }
+        } catch (error) {
+            console.error(
+                'Photon fallback error for query:',
+                query,
+                error.response?.status || error.message
+            );
+            break;
+        }
+    }
+
+    if (blocked) {
+        throw new GeoError('Location service is rate limited, try again shortly', 503);
     }
 
     throw new GeoError(`Location not found: ${original}`, 404);
@@ -232,9 +328,8 @@ module.exports.getDistanceTime = async (origin, destination) => {
 
 /* ================= SUGGESTIONS ================= */
 
-// NOTE: Nominatim's public usage policy forbids search-as-you-type
-// autocomplete. Debounce the frontend (>= 600ms, min 3 chars) and consider
-// Photon (photon.komoot.io) or a self-hosted instance for real autocomplete.
+// Uses Photon (built for search-as-you-type) instead of Nominatim,
+// whose public policy forbids autocomplete.
 module.exports.getAutoCompleteSuggestions = async (input) => {
     if (!input || typeof input !== 'string') {
         throw new GeoError('Query is required', 400);
@@ -242,83 +337,59 @@ module.exports.getAutoCompleteSuggestions = async (input) => {
 
     const query = input.trim();
 
-    // Too short to be useful, don't waste a Nominatim slot
+    // Too short to be useful
     if (query.length < 3) return [];
 
-    const listKey = `sug:${hash(query.toLowerCase())}`;
+    const listKey = `sug:photon:${hash(query.toLowerCase())}`;
 
     const cachedList = await cacheGet(listKey);
 
     if (cachedList) return cachedList;
 
     try {
-        await throttleNominatim();
+        const places = await photonSearch(query, 5);
 
-        const { data } = await axios.get(`${NOMINATIM}/search`, {
-            params: {
-                q: query,
-                format: 'json',
-                addressdetails: 1,
-                limit: 5,
-                countrycodes: 'in'
-            },
-            headers: HEADERS,
-            timeout: 10000
-        });
+        const suggestions = places.map(place => ({
+            description: place.address,
+            address: place.address,
+            lat: place.lat,
+            ltd: place.lat,
+            lng: place.lng
+        }));
 
-        const suggestions = [];
-        const coordEntries = [];
-
-        for (const place of data || []) {
-            const lat = Number(place.lat);
-            const lng = Number(place.lon);
-
-            // Har suggestion ke coordinates cache me rakho, taaki user jab ise chune
-            // to ride creation ko dobara Nominatim call na karni pade
-            if (
-                place.display_name &&
-                Number.isFinite(lat) &&
-                Number.isFinite(lng)
-            ) {
-                coordEntries.push([
-                    PREFIX + geoKey(place.display_name),
-                    JSON.stringify({ lat, ltd: lat, lng })
-                ]);
-
-                suggestions.push({
-                    description: place.display_name,
-                    address: place.display_name,
-                    lat,
-                    ltd: lat,
-                    lng
-                });
-            }
-        }
-
-        // ek round trip me sab save; fail ho to koi dikkat nahi
-        if (coordEntries.length) {
+        // Save each suggestion's coordinates so ride creation does not need
+        // another geocode call when the user selects it
+        if (places.length) {
             try {
                 const pipe = redis.pipeline();
-                for (const [k, v] of coordEntries) {
-                    pipe.set(k, v, 'EX', GEO_TTL);
+
+                for (const place of places) {
+                    pipe.set(
+                        PREFIX + geoKey(place.address),
+                        JSON.stringify({
+                            lat: place.lat,
+                            ltd: place.lat,
+                            lng: place.lng
+                        }),
+                        'EX',
+                        GEO_TTL
+                    );
                 }
+
                 await pipe.exec();
             } catch {
                 /* ignore */
             }
         }
 
-        // Cache the list itself (only when non-empty, so a transient
-        // empty result isn't stuck for 10 minutes)
+        // Cache only non-empty lists, so a transient empty result
+        // is not stuck for 10 minutes
         if (suggestions.length) {
             await cacheSet(listKey, suggestions, SUGGEST_TTL);
         }
 
         return suggestions;
     } catch (error) {
-        // Queue is full
-        if (error instanceof GeoError) throw error;
-
         const status = error.response?.status;
 
         console.error('Autocomplete error for input:', query, status || error.message);
