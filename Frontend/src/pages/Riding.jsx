@@ -1,4 +1,3 @@
-
 import React, {
     useCallback,
     useContext,
@@ -85,6 +84,9 @@ const Riding = () => {
     );
 
     const [captainLocation, setCaptainLocation] = useState(null);
+
+    // Bottom sheet open/closed (mobile only)
+    const [isSheetOpen, setIsSheetOpen] = useState(true);
 
     const rideId = getRideId(ride);
 
@@ -464,6 +466,19 @@ const Riding = () => {
     }, [socket, leaveRide]);
 
     // ==========================================
+    // RESIZE MAP AFTER SHEET ANIMATION
+    // ==========================================
+
+    useEffect(() => {
+        // Leaflet needs a resize event to redraw after its container changes size.
+        const timer = setTimeout(() => {
+            window.dispatchEvent(new Event('resize'));
+        }, 320);
+
+        return () => clearTimeout(timer);
+    }, [isSheetOpen]);
+
+    // ==========================================
     // NO ACTIVE RIDE
     // ==========================================
 
@@ -512,7 +527,13 @@ const Riding = () => {
         <div className="relative flex h-[100dvh] w-full flex-col overflow-hidden bg-gray-100 lg:flex-row">
 
             {/* MAP */}
-            <div className="relative h-[48dvh] min-h-[280px] w-full shrink-0 overflow-hidden bg-gray-200 sm:h-[55dvh] lg:h-full lg:flex-1">
+            <div
+                className={`relative w-full shrink-0 overflow-hidden bg-gray-200 transition-[height] duration-300 ease-in-out lg:h-full lg:flex-1 ${
+                    isSheetOpen
+                        ? 'h-[48dvh] min-h-[280px] sm:h-[55dvh]'
+                        : 'h-[calc(100dvh-120px)]'
+                }`}
+            >
                 <LiveTracking
                     role="user"
                     captainLocation={captainLocation}
@@ -554,12 +575,37 @@ const Riding = () => {
             </div>
 
             {/* RIDE DETAILS */}
-            <div className="relative z-[450] flex min-h-0 w-full flex-1 flex-col overflow-y-auto rounded-t-[28px] bg-white px-4 pb-6 pt-4 shadow-[0_-8px_30px_rgba(0,0,0,0.12)] sm:px-6 lg:h-full lg:max-h-full lg:w-[420px] lg:flex-none lg:rounded-none lg:border-l lg:border-gray-100 lg:px-6 lg:pt-8 lg:shadow-none xl:w-[460px]">
+            <div
+                className={`relative z-[450] flex w-full flex-col rounded-t-[28px] bg-white px-4 pb-6 pt-3 shadow-[0_-8px_30px_rgba(0,0,0,0.12)] transition-[height] duration-300 ease-in-out sm:px-6 lg:h-full lg:max-h-full lg:w-[420px] lg:flex-none lg:overflow-y-auto lg:rounded-none lg:border-l lg:border-gray-100 lg:px-6 lg:pt-8 lg:shadow-none xl:w-[460px] ${
+                    isSheetOpen
+                        ? 'min-h-0 flex-1 overflow-y-auto'
+                        : 'h-[120px] flex-none overflow-hidden'
+                }`}
+            >
 
-                <div className="mx-auto mb-5 h-1 w-12 shrink-0 rounded-full bg-gray-300 lg:hidden" />
+                {/* SLIDE UP / DOWN ARROW (mobile only) */}
+                <button
+                    type="button"
+                    onClick={() => setIsSheetOpen(open => !open)}
+                    aria-label={
+                        isSheetOpen
+                            ? 'Collapse ride details'
+                            : 'Expand ride details'
+                    }
+                    aria-expanded={isSheetOpen}
+                    className="mx-auto mb-3 flex h-8 w-14 shrink-0 items-center justify-center rounded-full bg-gray-100 text-[#12334A] transition active:scale-95 lg:hidden"
+                >
+                    <i
+                        className={`text-2xl leading-none ${
+                            isSheetOpen
+                                ? 'ri-arrow-down-s-line'
+                                : 'ri-arrow-up-s-line'
+                        }`}
+                    />
+                </button>
 
                 {/* HEADER */}
-                <div className="mb-5 flex items-center justify-between">
+                <div className="mb-5 flex shrink-0 items-center justify-between">
                     <div>
                         <p className="text-xs font-semibold uppercase tracking-widest text-gray-400">
                             Your journey
