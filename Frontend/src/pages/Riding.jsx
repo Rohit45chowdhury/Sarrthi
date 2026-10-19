@@ -86,7 +86,7 @@ const Riding = () => {
     const [captainLocation, setCaptainLocation] = useState(null);
 
     // Bottom sheet open/closed (mobile only)
-    const [isSheetOpen, setIsSheetOpen] = useState(true);
+    const [isSheetOpen, setIsSheetOpen] = useState(false);
 
     const rideId = getRideId(ride);
 
