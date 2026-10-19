@@ -1,4 +1,3 @@
-
 import React, {
     useRef,
     useState,
@@ -1111,12 +1110,20 @@ const Home = () => {
                     captainLocation={
                         showLiveTracking ? captainLocation : null
                     }
-                    pickupLocation={extractCoords(
+                    pickupLocation={
                         ride?.pickupCoordinates ||
-                        ride?.pickupLocation
-                    )}
+                        ride?.pickupLocation ||
+                        null
+                    }
                     pickupAddress={ride?.pickup || pickup}
-                    showInfo={true}
+                    showInfo={showLiveTracking}
+                    infoTop="4.5rem"
+                    fitPadding={{
+                        top: 140,
+                        right: 50,
+                        left: 50,
+                        bottom: Math.round(window.innerHeight * 0.5)
+                    }}
                 />
             </div>
 
@@ -1136,7 +1143,7 @@ const Home = () => {
                         }}
                         aria-label={panelOpen ? 'Close search panel' : 'Open search panel'}
                         aria-expanded={panelOpen}
-                        className="absolute left-1/2 z-[60] flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full border border-gray-200 bg-white text-2xl text-[#12334A] shadow-lg transition-all duration-300 hover:text-[#F15A24] active:scale-90"
+                        className="absolute -top-5 left-1/2 z-[60] flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full border border-gray-200 bg-white text-2xl text-[#12334A] shadow-lg transition-all duration-300 hover:text-[#F15A24] active:scale-90"
                     >
                         <i
                             className={

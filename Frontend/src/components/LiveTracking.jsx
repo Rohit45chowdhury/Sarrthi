@@ -1,4 +1,3 @@
-
 import React, {
   useEffect,
   useMemo,
@@ -22,7 +21,14 @@ import 'leaflet/dist/leaflet.css';
 const OSRM_URL = 'https://router.project-osrm.org/route/v1/driving';
 
 const FALLBACK_CENTER = [22.5726, 88.3639];
-const DEFAULT_PADDING = 55;
+
+const ROUTE_REFRESH_MS = 4000;
+const ROUTE_MOVE_THRESHOLD_M = 30;
+const ROUTE_STALE_THRESHOLD_M = 150;
+
+// Used only until the real road route arrives (about 25 km/h).
+const AVG_SPEED_MPS = 7;
+const ROAD_FACTOR = 1.3;
 
 // ---------------- ICONS ----------------
 
@@ -45,6 +51,7 @@ const userIcon = new L.DivIcon({
 function normalizePoint(point) {
   if (!point) return null;
 
+  // Nested payload: { location: { ltd, lng } }
   if (
     typeof point === 'object' &&
     !Array.isArray(point) &&
@@ -61,18 +68,14 @@ function normalizePoint(point) {
     [lat, lng] = point;
   } else if (typeof point === 'object') {
     lat = point.lat ?? point.latitude ?? point.ltd;
-    lng = point.lng ?? point.longitude;
+    lng = point.lng ?? point.long ?? point.longitude ?? point.lon;
   } else {
     return null;
   }
 
   if (
-    lat === null ||
-    lat === undefined ||
-    lat === '' ||
-    lng === null ||
-    lng === undefined ||
-    lng === ''
+    lat === null || lat === undefined || lat === '' ||
+    lng === null || lng === undefined || lng === ''
   ) {
     return null;
   }
@@ -92,7 +95,7 @@ function normalizePoint(point) {
   return [lat, lng];
 }
 
-// ---------------- DISTANCE CALCULATION ----------------
+// ---------------- DISTANCE / FORMAT ----------------
 
 function distanceMeters(a, b) {
   if (!a || !b) return null;
@@ -113,19 +116,25 @@ function distanceMeters(a, b) {
   return (
     6371000 *
     2 *
-    Math.atan2(
-      Math.sqrt(h),
-      Math.sqrt(Math.max(0, 1 - h))
-    )
+    Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)))
   );
 }
 
-function formatKm(meters) {
-  if (meters == null || !Number.isFinite(meters)) {
-    return '-- km';
+function formatDistance(meters) {
+  if (meters == null || !Number.isFinite(meters)) return '--';
+
+  if (meters < 1000) {
+    return `${Math.max(10, Math.round(meters / 10) * 10)} m`;
   }
 
-  return `${(meters / 1000).toFixed(2)} km`;
+  return `${(meters / 1000).toFixed(1)} km`;
+}
+
+function formatMinutes(seconds, approximate = false) {
+  if (seconds == null || !Number.isFinite(seconds)) return '--';
+
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  return `${approximate ? '~' : ''}${minutes} min`;
 }
 
 // ---------------- MAP AUTO-POSITIONING ----------------
@@ -135,7 +144,19 @@ function FitPoints({ points, padding }) {
   const initializedRef = useRef(false);
 
   useEffect(() => {
-    if (!points.length) return;
+    if (!points.length) {
+      // Re-fit when the next ride starts.
+      initializedRef.current = false;
+      return;
+    }
+
+    const size = map.getSize();
+
+    // Never let padding swallow the whole map on small screens.
+    const top = Math.min(padding.top, size.y * 0.25);
+    const bottom = Math.min(padding.bottom, size.y * 0.55);
+    const left = Math.min(padding.left, size.x * 0.2);
+    const right = Math.min(padding.right, size.x * 0.2);
 
     const fit = animate => {
       if (points.length === 1) {
@@ -144,8 +165,8 @@ function FitPoints({ points, padding }) {
       }
 
       map.fitBounds(L.latLngBounds(points), {
-        paddingTopLeft: [padding.left, padding.top],
-        paddingBottomRight: [padding.right, padding.bottom],
+        paddingTopLeft: [left, top],
+        paddingBottomRight: [right, bottom],
         maxZoom: 16,
         animate
       });
@@ -157,16 +178,14 @@ function FitPoints({ points, padding }) {
       return;
     }
 
-    const size = map.getSize();
-
     const outside = points.some(point => {
       const p = map.latLngToContainerPoint(point);
 
       return (
-        p.x < padding.left ||
-        p.x > size.x - padding.right ||
-        p.y < padding.top ||
-        p.y > size.y - padding.bottom
+        p.x < left ||
+        p.x > size.x - right ||
+        p.y < top ||
+        p.y > size.y - bottom
       );
     });
 
@@ -188,6 +207,7 @@ export default function LiveTracking({
   showInfo = true,
   zoomControl = false,
   fitPadding = null,
+  infoTop = '4.5rem',
   className = ''
 }) {
   const [myPosition, setMyPosition] = useState(null);
@@ -205,16 +225,19 @@ export default function LiveTracking({
   });
   const routeRequestRef = useRef(null);
 
+  const cardVisible = showInfo && tracking;
+
   const padding = useMemo(() => ({
-    top: fitPadding?.top ?? DEFAULT_PADDING,
-    right: fitPadding?.right ?? DEFAULT_PADDING,
-    bottom: fitPadding?.bottom ?? DEFAULT_PADDING,
-    left: fitPadding?.left ?? DEFAULT_PADDING
+    top: fitPadding?.top ?? (cardVisible ? 130 : 55),
+    right: fitPadding?.right ?? 55,
+    bottom: fitPadding?.bottom ?? 55,
+    left: fitPadding?.left ?? 55
   }), [
     fitPadding?.top,
     fitPadding?.right,
     fitPadding?.bottom,
-    fitPadding?.left
+    fitPadding?.left,
+    cardVisible
   ]);
 
   // ---------------- CURRENT DEVICE GPS ----------------
@@ -275,13 +298,18 @@ export default function LiveTracking({
     if (role === 'captain') {
       if (!tracking) return null;
 
+      // Live passenger position first, pickup point as fallback.
       return (
         normalizePoint(userLocation) ||
         normalizePoint(pickupLocation)
       );
     }
 
-    return normalizePoint(myPosition);
+    // Passenger: own GPS first, pickup point as fallback.
+    return (
+      normalizePoint(myPosition) ||
+      normalizePoint(pickupLocation)
+    );
   }, [role, tracking, userLocation, pickupLocation, myPosition]);
 
   latestPointsRef.current = { captainPoint, userPoint };
@@ -298,22 +326,20 @@ export default function LiveTracking({
     [captainPoint, userPoint]
   );
 
-  // ---------------- CLEAR ROUTE WHEN TRACKING STOPS ----------------
-
-  useEffect(() => {
-    if (hasBoth) return;
-
-    lastRoutedPointsRef.current = null;
-
-    setRoute([]);
-    setRouteDistance(null);
-    setRouteDuration(null);
-    setRouteError('');
-  }, [hasBoth]);
-
   // ---------------- ROAD ROUTE AND ETA ----------------
+  // Starts immediately once both points exist, then refreshes.
 
   useEffect(() => {
+    if (!hasBoth) {
+      lastRoutedPointsRef.current = null;
+
+      setRoute([]);
+      setRouteDistance(null);
+      setRouteDuration(null);
+      setRouteError('');
+      return;
+    }
+
     let isMounted = true;
 
     const fetchRoute = async () => {
@@ -328,11 +354,13 @@ export default function LiveTracking({
 
       const captainMoved =
         !previous ||
-        distanceMeters(previous.captain, captain) >= 50;
+        distanceMeters(previous.captain, captain) >=
+          ROUTE_MOVE_THRESHOLD_M;
 
       const userMoved =
         !previous ||
-        distanceMeters(previous.user, user) >= 50;
+        distanceMeters(previous.user, user) >=
+          ROUTE_MOVE_THRESHOLD_M;
 
       if (!captainMoved && !userMoved) return;
 
@@ -342,7 +370,6 @@ export default function LiveTracking({
       const controller = new AbortController();
       routeRequestRef.current = controller;
 
-      // Remember which coordinates this request used.
       const requestedCaptain = [...captain];
       const requestedUser = [...user];
 
@@ -372,15 +399,16 @@ export default function LiveTracking({
 
         if (!isMounted) return;
 
-        // Do not apply an old result if either location moved
-        // significantly while this request was in progress.
+        // Skip an old result if either point moved a lot meanwhile.
         const latest = latestPointsRef.current;
 
         const captainIsStale =
-          distanceMeters(requestedCaptain, latest.captainPoint) >= 100;
+          distanceMeters(requestedCaptain, latest.captainPoint) >=
+          ROUTE_STALE_THRESHOLD_M;
 
         const userIsStale =
-          distanceMeters(requestedUser, latest.userPoint) >= 100;
+          distanceMeters(requestedUser, latest.userPoint) >=
+          ROUTE_STALE_THRESHOLD_M;
 
         if (captainIsStale || userIsStale) return;
 
@@ -407,35 +435,50 @@ export default function LiveTracking({
       }
     };
 
-    const initialTimer = setTimeout(fetchRoute, 500);
-    const interval = setInterval(fetchRoute, 5000);
+    fetchRoute();
+    const interval = setInterval(fetchRoute, ROUTE_REFRESH_MS);
 
     return () => {
       isMounted = false;
-      clearTimeout(initialTimer);
       clearInterval(interval);
 
       routeRequestRef.current?.abort();
       routeRequestRef.current = null;
     };
-  }, []);
+  }, [hasBoth]);
 
   // ---------------- DISPLAY VALUES ----------------
 
-  const formatMinutes = seconds => {
-    if (seconds == null || !Number.isFinite(seconds)) {
-      return '--';
-    }
-
-    return `${Math.max(1, Math.round(seconds / 60))} min`;
-  };
-
-  const otherLabel = role === 'captain'
-    ? pickupAddress || 'Passenger location'
-    : 'Captain location';
+  const isRoadRoute = routeDistance !== null;
 
   const displayedDistance = routeDistance ?? straightDistance;
-  const isRoadDistance = routeDistance !== null;
+
+  // Instant estimate until the road route arrives.
+  const estimatedSeconds =
+    straightDistance != null
+      ? (straightDistance * ROAD_FACTOR) / AVG_SPEED_MPS
+      : null;
+
+  const displayedDuration = routeDuration ?? estimatedSeconds;
+
+  const directionLabel =
+    role === 'captain' ? 'You → Passenger' : 'Captain → You';
+
+  const statusMessage = gpsError
+    ? { text: gpsError, tone: 'text-red-600' }
+    : !hasBoth
+      ? {
+          text: 'Waiting for both live locations...',
+          tone: 'text-amber-700'
+        }
+      : routeError
+        ? { text: routeError, tone: 'text-amber-700' }
+        : null;
+
+  const userMarkerLabel =
+    role === 'captain'
+      ? pickupAddress || 'Passenger location'
+      : 'You';
 
   // ---------------- UI ----------------
 
@@ -443,116 +486,63 @@ export default function LiveTracking({
     <div
       className={`relative isolate h-full min-h-[300px] w-full overflow-hidden ${className}`}
     >
-      {/* Responsive distance and estimated time card */}
-      {showInfo && (
-        <div className="pointer-events-none absolute bottom-3 left-3 right-3 z-[500] mx-auto max-w-md sm:bottom-5 sm:left-auto sm:right-5 sm:mx-0">
-          <div className="rounded-2xl border border-gray-200/80 bg-white/95 p-3 shadow-xl backdrop-blur-md sm:p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 sm:text-xs">
-                  Live ride tracking
-                </p>
-                <h3 className="mt-0.5 truncate text-sm font-bold text-[#12334A] sm:text-base">
-                  {role === 'captain'
-                    ? 'You and passenger'
-                    : 'You and your captain'}
-                </h3>
-              </div>
+      {/* Distance and ETA card (top, clear of bottom sheets) */}
+      {cardVisible && (
+        <div
+          className="pointer-events-none absolute left-3 right-3 z-[500] mx-auto max-w-sm"
+          style={{ top: infoTop }}
+        >
+          <div className="overflow-hidden rounded-2xl border border-gray-200/80 bg-white/95 shadow-xl backdrop-blur-md">
+            <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-3 py-1.5">
+              <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                {directionLabel}
+              </p>
 
-              <div className="flex shrink-0 items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1">
-                <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                <span className="text-[10px] font-semibold text-emerald-700 sm:text-xs">
+              <div className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                <span className="text-[10px] font-bold text-emerald-700">
                   LIVE
                 </span>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 sm:gap-3">
-              {/* Distance */}
-              <div className="rounded-xl bg-slate-50 p-3 sm:p-4">
-                <div className="mb-2 flex items-center gap-2 text-gray-500">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#12334A] shadow-sm">
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-4 w-4"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                    >
-                      <path d="M4 7h16M4 17h16M7 4l-3 3 3 3M17 14l3 3-3 3" />
-                    </svg>
-                  </span>
-                  <span className="text-xs font-medium sm:text-sm">
-                    Distance
-                  </span>
-                </div>
-
-                <p className="text-xl font-extrabold leading-tight text-[#12334A] sm:text-2xl">
-                  {formatKm(displayedDistance)}
+            <div className="grid grid-cols-2 divide-x divide-gray-100">
+              <div className="min-w-0 px-3 py-2">
+                <p className="text-[11px] font-medium text-gray-500">
+                  Distance
                 </p>
-
-                <p className="mt-1 text-[10px] text-gray-500 sm:text-xs">
-                  {isRoadDistance
+                <p className="truncate text-lg font-extrabold leading-tight text-[#12334A]">
+                  {formatDistance(displayedDistance)}
+                </p>
+                <p className="truncate text-[10px] text-gray-400">
+                  {isRoadRoute
                     ? 'By road'
                     : straightDistance !== null
-                      ? 'Straight-line estimate'
+                      ? 'Straight line'
                       : 'Waiting for GPS'}
                 </p>
               </div>
 
-              {/* Estimated travel time */}
-              <div className="rounded-xl bg-orange-50/80 p-3 sm:p-4">
-                <div className="mb-2 flex items-center gap-2 text-gray-500">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#F15A24] shadow-sm">
-                    <svg
-                      viewBox="0 0 24 24"
-                      className="h-4 w-4"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                    >
-                      <circle cx="12" cy="12" r="9" />
-                      <path d="M12 7v5l3 2" />
-                    </svg>
-                  </span>
-                  <span className="text-xs font-medium sm:text-sm">
-                    Est. time
-                  </span>
-                </div>
-
-                <p className="text-xl font-extrabold leading-tight text-[#F15A24] sm:text-2xl">
-                  {formatMinutes(routeDuration)}
+              <div className="min-w-0 px-3 py-2">
+                <p className="text-[11px] font-medium text-gray-500">
+                  Est. time
                 </p>
-
-                <p className="mt-1 text-[10px] text-gray-500 sm:text-xs">
-                  {routeDuration !== null
-                    ? 'Estimated drive'
-                    : 'Calculating route'}
+                <p className="truncate text-lg font-extrabold leading-tight text-[#F15A24]">
+                  {formatMinutes(displayedDuration, !isRoadRoute)}
+                </p>
+                <p className="truncate text-[10px] text-gray-400">
+                  {isRoadRoute ? 'No live traffic' : 'Calculating route'}
                 </p>
               </div>
             </div>
 
-            {!hasBoth && (
-              <p className="mt-3 text-xs text-amber-700">
-                Waiting for both live GPS locations...
+            {statusMessage && (
+              <p
+                className={`truncate border-t border-gray-100 px-3 py-1 text-[11px] ${statusMessage.tone}`}
+              >
+                {statusMessage.text}
               </p>
             )}
-
-            {gpsError && (
-              <p className="mt-2 text-xs text-red-600">
-                {gpsError}
-              </p>
-            )}
-
-            {routeError && (
-              <p className="mt-2 text-xs text-amber-700">
-                {routeError}
-              </p>
-            )}
-
-            <p className="mt-2 text-[10px] leading-relaxed text-gray-400">
-              Time is an estimate and does not account for live traffic.
-            </p>
           </div>
         </div>
       )}
@@ -576,14 +566,14 @@ export default function LiveTracking({
         {captainPoint && (
           <Marker position={captainPoint} icon={captainIcon}>
             <Popup>
-              {role === 'captain' ? 'Your location' : 'Your captain'}
+              {role === 'captain' ? 'You (captain)' : 'Your captain'}
             </Popup>
           </Marker>
         )}
 
         {userPoint && (
           <Marker position={userPoint} icon={userIcon}>
-            <Popup>{otherLabel}</Popup>
+            <Popup>{userMarkerLabel}</Popup>
           </Marker>
         )}
 

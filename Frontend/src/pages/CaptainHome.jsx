@@ -1,6 +1,6 @@
-
 import React, {
     useEffect,
+    useMemo,
     useRef,
     useState,
     useContext,
@@ -80,6 +80,22 @@ const normalizeLocation = data => {
     );
 };
 
+/* Fallback: convert a pickup address into [lat, lng]. */
+const geocodeAddress = async address => {
+    const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`,
+        { headers: { 'Accept-Language': 'en' } }
+    );
+
+    if (!response.ok) {
+        throw new Error('Geocoding failed');
+    }
+
+    const results = await response.json();
+
+    return toCoords(results?.[0]?.lat, results?.[0]?.lon);
+};
+
 const CaptainHome = () => {
     const navigate = useNavigate();
 
@@ -101,6 +117,7 @@ const CaptainHome = () => {
     // Leaflet coordinate format: [latitude, longitude].
     const [captainPosition, setCaptainPosition] = useState(null);
     const [userPosition, setUserPosition] = useState(null);
+    const [pickupGeo, setPickupGeo] = useState(null);
 
     const [otp, setOtp] = useState('');
     const [verifyingOtp, setVerifyingOtp] = useState(false);
@@ -128,6 +145,38 @@ const CaptainHome = () => {
 
     const activeRideId = getRideId(ride);
     const isTracking = showLiveTracking && Boolean(activeRideId);
+
+    // Pickup coordinates stored on the ride (any common format).
+    const pickupFromRide = useMemo(
+        () =>
+            normalizeLocation(
+                ride?.pickupCoordinates || ride?.pickupLocation
+            ),
+        [ride?.pickupCoordinates, ride?.pickupLocation]
+    );
+
+    // Final pickup point: ride data first, geocoded address as fallback.
+    const pickupPoint = pickupFromRide || pickupGeo;
+
+    useEffect(() => {
+        setPickupGeo(null);
+
+        if (!isTracking || pickupFromRide || !ride?.pickup) return;
+
+        let cancelled = false;
+
+        geocodeAddress(ride.pickup)
+            .then(point => {
+                if (!cancelled) setPickupGeo(point);
+            })
+            .catch(error => {
+                console.warn('Pickup geocode error:', error.message);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [isTracking, activeRideId, pickupFromRide, ride?.pickup]);
 
     useEffect(() => {
         confirmOpenRef.current =
@@ -787,8 +836,19 @@ const CaptainHome = () => {
             );
 
             if (response.status === 200) {
-                const confirmedRide =
+                const confirmedData =
                     response.data.ride || response.data;
+
+                // Keep passenger and pickup data from the request popup.
+                const confirmedRide = {
+                    ...ride,
+                    ...confirmedData,
+                    user:
+                        confirmedData?.user &&
+                        typeof confirmedData.user === 'object'
+                            ? confirmedData.user
+                            : ride?.user
+                };
 
                 console.log('RIDE CONFIRMED:', confirmedRide);
 
@@ -928,12 +988,16 @@ const CaptainHome = () => {
                     userLocation={
                         isTracking ? userPosition : null
                     }
-                    pickupLocation={toCoords(
-                        ride?.pickupCoordinates?.ltd,
-                        ride?.pickupCoordinates?.lng
-                    )}
+                    pickupLocation={pickupPoint}
                     pickupAddress={ride?.pickup || ''}
                     showInfo={true}
+                    infoTop="calc(max(1rem, env(safe-area-inset-top)) + 3.75rem)"
+                    fitPadding={{
+                        top: 140,
+                        right: 50,
+                        left: 50,
+                        bottom: Math.round(window.innerHeight * 0.46)
+                    }}
                 />
             </div>
 
