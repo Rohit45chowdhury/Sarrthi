@@ -30,6 +30,10 @@ const ROUTE_STALE_THRESHOLD_M = 150;
 const AVG_SPEED_MPS = 7;
 const ROAD_FACTOR = 1.3;
 
+// Distance/time card sits at the top, so the map must keep
+// markers below it (card bottom is roughly 190px from the top).
+const CARD_SAFE_TOP = 200;
+
 // ---------------- ICONS ----------------
 
 const captainIcon = new L.DivIcon({
@@ -153,10 +157,17 @@ function FitPoints({ points, padding }) {
     const size = map.getSize();
 
     // Never let padding swallow the whole map on small screens.
-    const top = Math.min(padding.top, size.y * 0.25);
-    const bottom = Math.min(padding.bottom, size.y * 0.55);
+    const top = Math.min(padding.top, size.y * 0.35);
     const left = Math.min(padding.left, size.x * 0.2);
     const right = Math.min(padding.right, size.x * 0.2);
+
+    // Keep at least 15% of the height free for the markers.
+    let bottom = Math.min(padding.bottom, size.y * 0.55);
+    const maxTotal = size.y * 0.85;
+
+    if (top + bottom > maxTotal) {
+      bottom = Math.max(0, maxTotal - top);
+    }
 
     const fit = animate => {
       if (points.length === 1) {
@@ -227,8 +238,12 @@ export default function LiveTracking({
 
   const cardVisible = showInfo && tracking;
 
+  // When the card is visible, the top padding is never smaller than the
+  // card area, even if the parent passes a smaller value.
   const padding = useMemo(() => ({
-    top: fitPadding?.top ?? (cardVisible ? 130 : 55),
+    top: cardVisible
+      ? Math.max(fitPadding?.top ?? 0, CARD_SAFE_TOP)
+      : fitPadding?.top ?? 55,
     right: fitPadding?.right ?? 55,
     bottom: fitPadding?.bottom ?? 55,
     left: fitPadding?.left ?? 55
@@ -279,38 +294,47 @@ export default function LiveTracking({
     return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
+  // ---------------- LIVE POINTS ----------------
+  // Both sides measure between the SAME two live points:
+  // the captain's GPS and the passenger's GPS. That is why
+  // distance and time match on both screens.
+
+  const myPoint = useMemo(
+    () => normalizePoint(myPosition),
+    [myPosition]
+  );
+
+  const livePassengerPoint = useMemo(
+    () =>
+      role === 'captain'
+        ? normalizePoint(userLocation)
+        : myPoint,
+    [role, userLocation, myPoint]
+  );
+
+  const pickupPoint = useMemo(
+    () => normalizePoint(pickupLocation),
+    [pickupLocation]
+  );
+
   // ---------------- CAPTAIN POSITION ----------------
 
   const captainPoint = useMemo(() => {
     if (role === 'captain') {
-      return (
-        normalizePoint(myPosition) ||
-        normalizePoint(captainLocation)
-      );
+      return myPoint || normalizePoint(captainLocation);
     }
 
     return tracking ? normalizePoint(captainLocation) : null;
-  }, [role, tracking, myPosition, captainLocation]);
+  }, [role, tracking, myPoint, captainLocation]);
 
   // ---------------- USER / PICKUP POSITION ----------------
 
   const userPoint = useMemo(() => {
-    if (role === 'captain') {
-      if (!tracking) return null;
+    if (role === 'captain' && !tracking) return null;
 
-      // Live passenger position first, pickup point as fallback.
-      return (
-        normalizePoint(userLocation) ||
-        normalizePoint(pickupLocation)
-      );
-    }
-
-    // Passenger: own GPS first, pickup point as fallback.
-    return (
-      normalizePoint(myPosition) ||
-      normalizePoint(pickupLocation)
-    );
-  }, [role, tracking, userLocation, pickupLocation, myPosition]);
+    // Live passenger position first, pickup point as fallback.
+    return livePassengerPoint || pickupPoint;
+  }, [role, tracking, livePassengerPoint, pickupPoint]);
 
   latestPointsRef.current = { captainPoint, userPoint };
 
@@ -461,8 +485,17 @@ export default function LiveTracking({
 
   const displayedDuration = routeDuration ?? estimatedSeconds;
 
+  // True only when the passenger end of the line is a real live GPS point.
+  const usingLivePassenger = Boolean(livePassengerPoint);
+
   const directionLabel =
-    role === 'captain' ? 'You → Passenger' : 'Captain → You';
+    role === 'captain'
+      ? usingLivePassenger
+        ? 'You → Passenger'
+        : 'You → Pickup'
+      : usingLivePassenger
+        ? 'Captain → You'
+        : 'Captain → Pickup';
 
   const statusMessage = gpsError
     ? { text: gpsError, tone: 'text-red-600' }
@@ -473,12 +506,21 @@ export default function LiveTracking({
         }
       : routeError
         ? { text: routeError, tone: 'text-amber-700' }
-        : null;
+        : role === 'captain' && !usingLivePassenger
+          ? {
+              text: 'Waiting for passenger live location...',
+              tone: 'text-amber-700'
+            }
+          : null;
 
   const userMarkerLabel =
     role === 'captain'
-      ? pickupAddress || 'Passenger location'
-      : 'You';
+      ? usingLivePassenger
+        ? 'Passenger (live)'
+        : pickupAddress || 'Pickup location'
+      : usingLivePassenger
+        ? 'You'
+        : pickupAddress || 'Pickup location';
 
   // ---------------- UI ----------------
 

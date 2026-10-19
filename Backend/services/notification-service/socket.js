@@ -366,7 +366,9 @@ function initializeSocket(server) {
 
 
         // ==================================================
-        // USER LIVE LOCATION -> CAPTAIN (ride ongoing)
+        // USER LIVE LOCATION -> CAPTAIN
+        // Relayed while the captain is heading to pickup ('accepted')
+        // and while the ride is running ('ongoing').
         // ==================================================
 
         socket.on('user-live-location', async (data) => {
@@ -396,7 +398,7 @@ function initializeSocket(server) {
                     if (
                         tracked.userId === String(socket.data.userId) &&
                         tracked.rideId === rideId &&
-                        tracked.phase === 'ongoing'
+                        (tracked.phase === 'accepted' || tracked.phase === 'ongoing')
                     ) {
                         matchingCaptainId = captainId;
                         matchingRide = tracked;
@@ -408,8 +410,10 @@ function initializeSocket(server) {
                     return;
                 }
 
+                // Send both key styles (`ltd` and `lat`) so any frontend reads it
                 emitToCaptain(matchingCaptainId, 'user-live-location', {
                     rideId: matchingRide.rideId,
+                    ltd,
                     lat: ltd,
                     lng
                 });
