@@ -86,7 +86,7 @@ const Riding = () => {
     const [captainLocation, setCaptainLocation] = useState(null);
 
     // Bottom sheet open/closed (mobile only)
-    const [isSheetOpen, setIsSheetOpen] = useState(false);
+    const [isSheetOpen, setIsSheetOpen] = useState(true);
 
     const rideId = getRideId(ride);
 
@@ -526,11 +526,12 @@ const Riding = () => {
     return (
         <div className="relative flex h-[100dvh] w-full flex-col overflow-hidden bg-gray-100 lg:flex-row">
 
+            
             {/* MAP */}
             <div
                 className={`relative w-full shrink-0 overflow-hidden bg-gray-200 transition-[height] duration-300 ease-in-out lg:h-full lg:flex-1 ${
                     isSheetOpen
-                        ? 'h-[48dvh] min-h-[280px] sm:h-[55dvh]'
+                        ? 'h-[100px] sm:h-[100px]'
                         : 'h-[calc(100dvh-120px)]'
                 }`}
             >
