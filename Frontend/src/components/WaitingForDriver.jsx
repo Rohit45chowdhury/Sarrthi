@@ -11,14 +11,31 @@ const WaitingForDriver = (props) => {
 
     const vehiclePlate = captain?.vehicle?.plate || 'Not available'
 
-    const vehicleModel =
-        captain?.vehicle?.vehicleType === 'car'
+    // Normalize type so 'Car', 'car', 'motorcycle', 'bike' etc. all work
+    const vehicleType = String(captain?.vehicle?.vehicleType || '').toLowerCase()
+
+    const vehicleLabel =
+        vehicleType === 'car'
             ? 'Car'
-            : captain?.vehicle?.vehicleType === 'moto'
+            : ['moto', 'motorcycle', 'bike'].includes(vehicleType)
                 ? 'Bike'
-                : captain?.vehicle?.vehicleType === 'auto'
+                : vehicleType === 'auto'
                     ? 'Auto'
                     : 'Vehicle'
+
+    // Icon instead of an external image, so it can never break
+    const vehicleIcon =
+        vehicleLabel === 'Bike'
+            ? 'ri-motorbike-fill'
+            : vehicleLabel === 'Auto'
+                ? 'ri-taxi-fill'
+                : 'ri-car-fill'
+
+    // Model + color if available, e.g. "Swift Dzire · White"
+    const vehicleModel = [
+        captain?.vehicle?.model,
+        captain?.vehicle?.color,
+    ].filter(Boolean).join(' · ')
 
     return (
         <div className="relative mx-auto w-full max-w-5xl overflow-hidden bg-white">
@@ -80,11 +97,7 @@ const WaitingForDriver = (props) => {
                             <div className="relative flex items-center gap-3 sm:gap-4">
 
                                 <div className="flex h-[76px] w-[92px] shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white sm:h-24 sm:w-28">
-                                    <img
-                                        src="https://swyft.pl/wp-content/uploads/2023/05/how-many-people-can-a-uberx-take.jpg"
-                                        alt="Driver vehicle"
-                                        className="h-[60px] w-[78px] object-contain sm:h-20 sm:w-24"
-                                    />
+                                    <i className={`${vehicleIcon} text-5xl text-[#12334A] sm:text-6xl`} />
                                 </div>
 
                                 <div className="min-w-0 flex-1">
@@ -97,7 +110,7 @@ const WaitingForDriver = (props) => {
                                     </h2>
 
                                     <p className="truncate text-xs text-white/70 sm:text-sm">
-                                        {vehicleModel}
+                                        {vehicleModel ? `${vehicleLabel} · ${vehicleModel}` : vehicleLabel}
                                     </p>
 
                                     <div className="mt-2 inline-flex max-w-full rounded-md bg-white px-2 py-1">
